@@ -101,6 +101,22 @@ agent-rules-sync watch
 agent-rules-sync stop
 ```
 
+## Backups
+
+**Every file change is automatically backed up** with a timestamp.
+
+View your backups:
+```bash
+ls -lah ~/.config/agent-rules-sync/backups/
+```
+
+Restore a previous version:
+```bash
+cp ~/.config/agent-rules-sync/backups/claude_20260125_014532.md ~/.claude/CLAUDE.md
+```
+
+For detailed backup information, see [BACKUPS.md](BACKUPS.md)
+
 To completely uninstall:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/dhruv-anand-aintech/agent-rules-sync/main/uninstall.sh | bash
@@ -144,10 +160,11 @@ $ echo "- use pydantic for validation" >> ~/.claude/CLAUDE.md
 
 ✓ **Bidirectional sync** — rules can be added anywhere
 ✓ **Auto-deduplication** — same rule doesn't appear twice
-✓ **Automatic backups** — keeps timestamped backups
-✓ **Fire and forget** — daemon runs in background
+✓ **Automatic backups** — timestamped backups before every change
+✓ **Fire and forget** — daemon auto-starts and runs in background
 ✓ **Zero config** — works out of the box
-✓ **Real-time** — syncs within seconds
+✓ **Real-time** — syncs within 3 seconds
+✓ **Safe recovery** — restore any previous version from backups
 
 ## Merging Behavior
 

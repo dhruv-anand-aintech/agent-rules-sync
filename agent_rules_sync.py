@@ -138,6 +138,11 @@ class AgentRulesSync:
                         pass
 
             # Update master with merged rules
+            if self.master_file.exists():
+                backup_path = self._backup_file(self.master_file, "master")
+                if backup_path:
+                    self._log_message(f"Backed up master: {backup_path.name}")
+
             with open(self.master_file, 'w') as f:
                 f.write(all_agent_content)
 
@@ -148,7 +153,9 @@ class AgentRulesSync:
                     agent_path.parent.mkdir(parents=True, exist_ok=True)
 
                     if agent_path.exists():
-                        self._backup_file(agent_path, agent_id)
+                        backup_path = self._backup_file(agent_path, agent_id)
+                        if backup_path:
+                            self._log_message(f"Backed up {agent_id}: {backup_path.name}")
 
                     with open(agent_path, 'w') as f:
                         f.write(all_agent_content)
