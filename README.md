@@ -11,7 +11,7 @@ Works on **macOS**, **Linux**, and **Windows** (native + WSL).
 ### One-Line Install
 
 ```bash
-pip install git+https://github.com/yourusername/agent-rules-sync.git && agent-rules-sync
+pip install git+https://github.com/dhruv-anand-aintech/agent-rules-sync.git && agent-rules-sync
 ```
 
 That's it! The daemon starts automatically and runs in the background.
@@ -221,7 +221,7 @@ ls -la ~/.config/agent-rules-sync/backups/
 
 **One-liner:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/yourusername/agent-rules-sync/main/uninstall.sh | bash
+curl -fsSL https://raw.githubusercontent.com/dhruv-anand-aintech/agent-rules-sync/main/uninstall.sh | bash
 ```
 
 Or manually:
@@ -248,9 +248,13 @@ Contributions welcome! Feel free to submit issues and pull requests.
 
 ## Support
 
-- 🐛 Found a bug? [Open an issue](https://github.com/yourusername/agent-rules-sync/issues)
-- 💡 Have a feature idea? [Start a discussion](https://github.com/yourusername/agent-rules-sync/discussions)
+- 🐛 Found a bug? [Open an issue](https://github.com/dhruv-anand-aintech/agent-rules-sync/issues)
+- 💡 Have a feature idea? [Start a discussion](https://github.com/dhruv-anand-aintech/agent-rules-sync/discussions)
 - ❓ Questions? Check existing issues or create a new one
+
+## Repository
+
+https://github.com/dhruv-anand-aintech/agent-rules-sync
 
 ---
 

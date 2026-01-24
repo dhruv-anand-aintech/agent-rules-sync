@@ -11,7 +11,7 @@ setup(
     description="Synchronize rules across AI coding assistants (Claude Code, Cursor, Gemini, OpenCode)",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/yourusername/agent-rules-sync",
+    url="https://github.com/dhruv-anand-aintech/agent-rules-sync",
     py_modules=["agent_rules_sync"],
     classifiers=[
         "Programming Language :: Python :: 3",
