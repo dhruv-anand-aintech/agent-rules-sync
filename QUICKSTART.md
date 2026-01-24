@@ -1,12 +1,14 @@
 # Quick Start Guide
 
-Get started in 2 minutes!
+Get started in 1 minute!
 
 ## Install
 
 ```bash
-pip install git+https://github.com/dhruv-anand-aintech/agent-rules-sync.git && agent-rules-sync
+pip install git+https://github.com/dhruv-anand-aintech/agent-rules-sync.git
 ```
+
+✓ **Done!** The daemon is now running in the background.
 
 ## Start Using
 
@@ -20,7 +22,7 @@ pip install git+https://github.com/dhruv-anand-aintech/agent-rules-sync.git && a
    - my new rule here
    ```
 
-3. **Files are synced automatically (within 3 seconds)**
+3. **Files are automatically synced (within 3 seconds)**
 
    Your rule now exists in:
    - `~/.cursor/rules/global.mdc`

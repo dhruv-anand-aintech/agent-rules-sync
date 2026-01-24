@@ -11,32 +11,44 @@ Works on **macOS**, **Linux**, and **Windows** (native + WSL).
 ### One-Line Install
 
 ```bash
-pip install git+https://github.com/dhruv-anand-aintech/agent-rules-sync.git && agent-rules-sync
+pip install git+https://github.com/dhruv-anand-aintech/agent-rules-sync.git
 ```
 
-That's it! The daemon starts automatically and runs in the background.
+**That's it!** The daemon installs and starts automatically.
 
-### Platform-Specific Notes
+### What Happens During Installation
 
-**macOS & Linux:**
-- Uses native fork-based daemon
+1. **Daemon is installed** as a system service (auto-starts on boot)
+2. **Service starts immediately** and runs in the background
+3. **Rules sync automatically** every 3 seconds
+
+### Platform-Specific Installation
+
+**macOS:**
+- Installs as launchd service (`com.local.agent-rules-sync`)
+- Auto-starts on login
+- Logs to `~/.config/agent-rules-sync/`
+- File: `~/Library/LaunchAgents/com.local.agent-rules-sync.plist`
+
+**Linux:**
+- Installs as systemd user service (`agent-rules-sync.service`)
+- Auto-starts on login
 - Logs to `~/.config/agent-rules-sync/daemon.log`
+- File: `~/.config/systemd/user/agent-rules-sync.service`
 
 **Windows:**
-- Uses background thread (no fork)
-- Runs silently without console window
-- Logs to `~/.config/agent-rules-sync/daemon.log`
+- Installs batch file to startup folder
+- Auto-starts on next login
+- Logs to `~/.config/agent-rules-sync/`
+- File: `~/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/agent-rules-sync.bat`
 
 ## Usage
 
-### 1. Start Auto-Sync (One Time)
-```bash
-agent-rules-sync
-```
+### The daemon is already running!
 
-Runs in background, monitors all agent config files, syncs changes automatically.
+After installation, the daemon runs automatically in the background. Just start editing.
 
-### 2. Edit Rules Anywhere
+### 1. Edit Rules Anywhere
 Pick any location and edit:
 ```bash
 # Edit Claude Code rules
@@ -59,8 +71,8 @@ Just add or remove lines starting with `-`:
 - rule 3
 ```
 
-### 3. Changes Sync Automatically
-Within a few seconds, your changes appear in all other agents!
+### 2. Changes Sync Automatically
+Within 3 seconds, your changes appear in all other agents! No manual sync needed.
 
 ## How It Works
 
@@ -76,18 +88,22 @@ The master rules file is stored hidden in `~/.config/agent-rules-sync/RULES.md` 
 
 ## Commands
 
-```bash
-# Start daemon (runs in background)
-agent-rules-sync
+The daemon runs automatically. These commands are for management:
 
-# Check sync status
+```bash
+# Check daemon status
 agent-rules-sync status
 
 # Watch mode (foreground, useful for debugging)
 agent-rules-sync watch
 
-# Stop daemon
+# Stop daemon (it will auto-restart on next login)
 agent-rules-sync stop
+```
+
+To completely uninstall:
+```bash
+curl -fsSL https://raw.githubusercontent.com/dhruv-anand-aintech/agent-rules-sync/main/uninstall.sh | bash
 ```
 
 ## When Changes Take Effect

@@ -6,6 +6,28 @@ set -e
 
 echo "🗑️  Uninstalling Agent Rules Sync..."
 
+# Detect platform
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS
+    echo "Unloading macOS launchd service..."
+    PLIST="$HOME/Library/LaunchAgents/com.local.agent-rules-sync.plist"
+    if [ -f "$PLIST" ]; then
+        launchctl unload "$PLIST" 2>/dev/null || true
+        rm -f "$PLIST"
+    fi
+elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+    # Linux
+    echo "Stopping systemd service..."
+    systemctl --user stop agent-rules-sync.service 2>/dev/null || true
+    systemctl --user disable agent-rules-sync.service 2>/dev/null || true
+    systemctl --user daemon-reload 2>/dev/null || true
+    rm -f ~/.config/systemd/user/agent-rules-sync.service 2>/dev/null || true
+elif [[ "$OSTYPE" == "msys" || "$OSTYPE" == "win32" ]]; then
+    # Windows
+    echo "Removing Windows startup batch file..."
+    rm -f "$APPDATA/Microsoft/Windows/Start Menu/Programs/Startup/agent-rules-sync.bat" 2>/dev/null || true
+fi
+
 # Stop daemon if running
 echo "Stopping daemon..."
 agent-rules-sync stop 2>/dev/null || true

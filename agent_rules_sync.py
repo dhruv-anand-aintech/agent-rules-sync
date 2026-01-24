@@ -404,22 +404,19 @@ def main():
         description='Sync rules across AI coding assistants',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Quick Start:
-  # Start auto-sync daemon
-  agent-rules-sync
+The daemon runs automatically in the background after installation.
 
-  # Edit any agent file:
+Quick usage:
+  agent-rules-sync status    # Check daemon status
+  agent-rules-sync stop      # Stop daemon
+  agent-rules-sync watch     # Watch in foreground (for debugging)
+
+Edit any agent file to sync rules:
   vim ~/.claude/CLAUDE.md
   vim ~/.cursor/rules/global.mdc
   vim ~/.gemini/GEMINI.md
 
-  # Changes sync automatically!
-
-Commands:
-  (none)           Start daemon (runs in background)
-  status           Show sync status
-  watch            Watch and sync (foreground)
-  stop             Stop daemon
+Changes sync automatically within 3 seconds!
         """
     )
 
@@ -438,6 +435,20 @@ Commands:
     elif args.command == 'stop':
         syncer.daemon_stop()
     else:  # daemon (default)
+        # Just ensure daemon is running
+        if syncer.pid_file.exists():
+            try:
+                with open(syncer.pid_file) as f:
+                    pid = int(f.read().strip())
+                if sys.platform != "win32":
+                    os.kill(pid, 0)
+                    print(f"✓ Daemon already running (PID: {pid})")
+                else:
+                    print(f"✓ Daemon recorded as running (PID: {pid})")
+                return
+            except (OSError, ValueError):
+                pass
+
         syncer.daemon_start()
 
 
