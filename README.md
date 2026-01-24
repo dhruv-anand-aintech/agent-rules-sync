@@ -90,6 +90,19 @@ agent-rules-sync watch
 agent-rules-sync stop
 ```
 
+## When Changes Take Effect
+
+**Important:** Different agents load configuration at different times. After Agent Rules Sync updates files, you may need to restart your agent for changes to take effect:
+
+| Agent | What to Do |
+|-------|-----------|
+| **Claude Code** | Restart the application or start a new session |
+| **Cursor** | Changes apply automatically in new conversations |
+| **Gemini Antigravity** | Run `/memory refresh` command or restart |
+| **OpenCode** | Restart or start a new session |
+
+For detailed technical information, see [AGENT_FILE_RELOAD.md](AGENT_FILE_RELOAD.md)
+
 ## Example Workflow
 
 **Terminal 1:**

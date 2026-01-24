@@ -5,7 +5,7 @@ Get started in 2 minutes!
 ## Install
 
 ```bash
-pip install git+https://github.com/yourusername/agent-rules-sync.git && agent-rules-sync
+pip install git+https://github.com/dhruv-anand-aintech/agent-rules-sync.git && agent-rules-sync
 ```
 
 ## Start Using
@@ -20,12 +20,21 @@ pip install git+https://github.com/yourusername/agent-rules-sync.git && agent-ru
    - my new rule here
    ```
 
-3. **Save and wait 3 seconds**
+3. **Files are synced automatically (within 3 seconds)**
 
-   That's it! The rule appears in:
+   Your rule now exists in:
    - `~/.cursor/rules/global.mdc`
    - `~/.gemini/GEMINI.md`
    - `~/.config/opencode/AGENTS.md`
+
+4. **Restart your agent for changes to take effect:**
+
+   | Agent | Action |
+   |-------|--------|
+   | Claude Code | Restart or new session |
+   | Cursor | New conversation |
+   | Gemini | Run `/memory refresh` or restart |
+   | OpenCode | Restart or new session |
 
 ## Check Status
 
@@ -42,9 +51,11 @@ agent-rules-sync stop
 ## Uninstall
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/yourusername/agent-rules-sync/main/uninstall.sh | bash
+curl -fsSL https://raw.githubusercontent.com/dhruv-anand-aintech/agent-rules-sync/main/uninstall.sh | bash
 ```
 
 ---
 
-That's all you need to know! The daemon handles the rest automatically.
+**That's it!** Files sync automatically. Just restart your agent for changes to take effect.
+
+For technical details on how each agent loads configuration, see [AGENT_FILE_RELOAD.md](AGENT_FILE_RELOAD.md)
