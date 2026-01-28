@@ -69,6 +69,31 @@ class AgentRulesSync:
                 "name": "OpenCode",
                 "path": Path.home() / ".config" / "opencode" / "AGENTS.md",
                 "description": "OpenCode global agents configuration",
+            },
+            "config-agents": {
+                "name": "Config Agents",
+                "path": Path.home() / ".config" / "agents" / "AGENTS.md",
+                "description": "Config agents configuration",
+            },
+            "codex": {
+                "name": "Codex",
+                "path": Path.home() / ".codex" / "AGENTS.md",
+                "description": "Codex agent configuration",
+            },
+            "config": {
+                "name": "Config AGENTS",
+                "path": Path.home() / ".config" / "AGENTS.md",
+                "description": "Config root AGENTS file",
+            },
+            "agent": {
+                "name": "Local Agent (AGENTS.md)",
+                "path": Path.home() / ".agent" / "AGENTS.md",
+                "description": "Local agent configuration",
+            },
+            "agent-alt": {
+                "name": "Local Agent (AGENT.md)",
+                "path": Path.home() / ".agent" / "AGENT.md",
+                "description": "Local agent configuration (alternate)",
             }
         }
 
@@ -125,13 +150,9 @@ class AgentRulesSync:
 
     def _get_agent_heading(self, agent_name):
         """Get display name for agent heading."""
-        headings = {
-            "claude": "Claude Code",
-            "cursor": "Cursor",
-            "gemini": "Gemini",
-            "opencode": "OpenCode"
-        }
-        return headings.get(agent_name, agent_name)
+        if agent_name in self.agents:
+            return self.agents[agent_name]["name"].replace(" (", "").replace(")", "")
+        return agent_name
 
     def _build_file_content(self, shared_rules, agent_rules, agent_name):
         """Build file content with shared and agent-specific sections."""
