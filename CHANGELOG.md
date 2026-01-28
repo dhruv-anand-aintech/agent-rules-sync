@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.1] - 2026-01-28
+
+### Added
+- **Test coverage for file creation** — Verifies that non-existent agent config files are automatically created with synced content during sync
+- Test case: `test_sync_creates_nonexistent_agent_files` ensures missing agent files are populated with shared rules
+- Integration test: `test_full_workflow_creates_missing_agents` validates full workflow with missing agents
+
+### Fixed
+- Test suite organization — Moved to `tests/` directory with proper pytest structure
+
 ## [1.2.0] - 2026-01-28
 
 ### Added
