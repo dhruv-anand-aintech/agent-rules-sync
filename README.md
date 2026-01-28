@@ -97,17 +97,18 @@ Each agent file has the same structure:
 ### 1. Edit Rules Anywhere
 Pick any location and edit:
 ```bash
-# Edit Claude Code rules
-nano ~/.claude/CLAUDE.md
+# Main AI Editors
+vim ~/.claude/CLAUDE.md          # Claude Code
+vim ~/.cursor/rules/global.mdc   # Cursor
+vim ~/.gemini/GEMINI.md          # Gemini Antigravity
+vim ~/.config/opencode/AGENTS.md # OpenCode
 
-# Edit Cursor rules
-nano ~/.cursor/rules/global.mdc
-
-# Edit Gemini rules
-nano ~/.gemini/GEMINI.md
-
-# Edit OpenCode rules
-nano ~/.config/opencode/AGENTS.md
+# Additional Agent Locations
+vim ~/.config/agents/AGENTS.md   # Config Agents
+vim ~/.codex/AGENTS.md           # Codex
+vim ~/.config/AGENTS.md          # Config root
+vim ~/.agent/AGENTS.md           # Local Agent
+vim ~/.agent/AGENT.md            # Local Agent (alternate)
 ```
 
 Just add or remove lines starting with `-`:
@@ -122,9 +123,10 @@ Within 3 seconds, your changes appear in all other agents! No manual sync needed
 
 ## How It Works
 
-1. **Daemon monitors** all agent config files every 3 seconds
+1. **Daemon monitors** all 9 agent config file locations every 3 seconds
+   - Claude Code, Cursor, Gemini, OpenCode, Config Agents, Codex, Config root, Local Agent (2 variants)
 2. **Detects changes** in any file (master or agents)
-3. **Merges rules** from all sources
+3. **Merges rules** from all sources (shared + agent-specific)
 4. **Syncs to all agents** automatically
 5. **Deduplicates** identical rules
 
@@ -367,10 +369,29 @@ rm -rf ~/.config/agent-rules-sync        # Clean up config
 
 Your agent rule files are preserved and not deleted!
 
+## Supported Agent Locations
+
+Agent Rules Sync monitors and syncs rules across 9+ agent configuration locations:
+
+**Main Editors:**
+- Claude Code (`~/.claude/CLAUDE.md`)
+- Cursor (`~/.cursor/rules/global.mdc`)
+- Gemini Antigravity (`~/.gemini/GEMINI.md`)
+- OpenCode (`~/.config/opencode/AGENTS.md`)
+
+**Additional Locations:**
+- Config Agents (`~/.config/agents/AGENTS.md`)
+- Codex (`~/.codex/AGENTS.md`)
+- Config Root (`~/.config/AGENTS.md`)
+- Local Agent (`~/.agent/AGENTS.md`)
+- Local Agent Alt (`~/.agent/AGENT.md`)
+
+Create any of these files and Agent Rules Sync will automatically sync rules to all other locations!
+
 ## Requirements
 
 - Python 3.8+
-- Claude Code, Cursor, Gemini, or OpenCode installed (at least one)
+- At least one agent configuration file location (any of the above)
 
 ## License
 
