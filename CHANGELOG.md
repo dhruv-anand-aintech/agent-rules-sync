@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.1] - 2026-01-28
+
+### Fixed
+- Uninstall script now reliably kills daemon process using pkill fallback
+- Prevents orphaned daemon processes after uninstall
+
 ## [1.1.0] - 2026-01-28
 
 ### Added
