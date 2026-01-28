@@ -95,3 +95,36 @@ def test_full_workflow_rule_deletion():
         cursor_content = cursor_file.read_text()
         assert "- rule to delete" not in claude_content
         assert "- rule to delete" not in cursor_content
+
+def test_full_workflow_creates_missing_agents():
+    """Test: Sync creates missing agent files with synced content."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config_dir = Path(tmpdir)
+        master_file = config_dir / "RULES.md"
+        claude_file = config_dir / "claude.md"
+        cursor_file = config_dir / "cursor.md"
+
+        sync = AgentRulesSync()
+        sync.config_dir = config_dir
+        sync.master_file = master_file
+        sync.agents = {
+            "claude": {"path": claude_file, "name": "Claude Code", "description": ""},
+            "cursor": {"path": cursor_file, "name": "Cursor", "description": ""}
+        }
+
+        # Initialize with only Claude file
+        claude_file.write_text("# Shared Rules\n- shared rule\n## Claude Code Specific\n- claude specific\n")
+        
+        # Cursor doesn't exist
+        assert not cursor_file.exists()
+
+        # Sync
+        sync._ensure_master_exists()
+        sync.sync()
+
+        # Cursor file should be created with synced content
+        assert cursor_file.exists()
+        cursor_content = cursor_file.read_text()
+        assert "- shared rule" in cursor_content
+        assert "## Cursor Specific" in cursor_content
+        assert "- claude specific" not in cursor_content  # agent-specific rule stays in claude only

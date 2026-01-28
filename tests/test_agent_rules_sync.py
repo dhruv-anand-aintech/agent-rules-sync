@@ -72,7 +72,7 @@ def test_ensure_master_has_all_sections():
         assert "# Shared Rules" in content
         assert "## Claude Code Specific" in content
         assert "## Cursor Specific" in content
-        assert "## Gemini Specific" in content
+        assert "## Gemini Antigravity Specific" in content
         assert "## OpenCode Specific" in content
 
 def test_sync_merges_shared_rules():
@@ -153,3 +153,35 @@ def test_sync_does_not_cross_pollinate_agent_rules():
         claude_content = claude_file.read_text()
         assert "- cursor only" not in claude_content
         assert "## Cursor Specific" not in claude_content
+
+def test_sync_creates_nonexistent_agent_files():
+    """Test: Sync creates non-existent agent files with synced content."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config_dir = Path(tmpdir)
+        master_file = config_dir / "RULES.md"
+        claude_file = config_dir / "claude.md"
+        cursor_file = config_dir / "cursor.md"
+
+        sync = AgentRulesSync()
+        sync.config_dir = config_dir
+        sync.master_file = master_file
+        
+        sync.agents["claude"]["path"] = claude_file
+        sync.agents["cursor"]["path"] = cursor_file
+
+        # Create only Claude file with a shared rule
+        claude_file.write_text("# Shared Rules\n- rule from claude\n## Claude Code Specific\n")
+        
+        # Cursor file does NOT exist yet
+        assert not cursor_file.exists()
+
+        # Initialize and sync
+        sync._ensure_master_exists()
+        sync.sync()
+
+        # Cursor file should be created with synced content
+        assert cursor_file.exists()
+        
+        cursor_content = cursor_file.read_text()
+        assert "- rule from claude" in cursor_content
+        assert "## Cursor Specific" in cursor_content
