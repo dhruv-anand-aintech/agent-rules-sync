@@ -92,14 +92,58 @@ class AgentRulesSync:
         except Exception:
             return None
 
-    def _merge_rules(self, content1, content2):
-        """Merge two rule files, deduplicating entries."""
-        rules1 = set(line.strip() for line in content1.split('\n')
-                    if line.strip() and line.strip().startswith('-'))
-        rules2 = set(line.strip() for line in content2.split('\n')
-                    if line.strip() and line.strip().startswith('-'))
-        all_rules = sorted(rules1 | rules2)
-        return '\n'.join(all_rules) + '\n'
+    def _extract_shared_rules(self, content):
+        """Extract rules from 'Shared Rules' section."""
+        rules = set()
+        lines = content.split('\n')
+        in_shared = False
+        for line in lines:
+            if line.strip() == '# Shared Rules':
+                in_shared = True
+                continue
+            if in_shared and line.strip().startswith('##'):
+                break
+            if in_shared and line.strip().startswith('-'):
+                rules.add(line.strip())
+        return rules
+
+    def _extract_agent_rules(self, content, agent_name):
+        """Extract rules from agent-specific section."""
+        rules = set()
+        agent_heading = f"## {self._get_agent_heading(agent_name)} Specific"
+        lines = content.split('\n')
+        in_section = False
+        for line in lines:
+            if line.strip() == agent_heading:
+                in_section = True
+                continue
+            if in_section and line.strip().startswith('##'):
+                break
+            if in_section and line.strip().startswith('-'):
+                rules.add(line.strip())
+        return rules
+
+    def _get_agent_heading(self, agent_name):
+        """Get display name for agent heading."""
+        headings = {
+            "claude": "Claude Code",
+            "cursor": "Cursor",
+            "gemini": "Gemini",
+            "opencode": "OpenCode"
+        }
+        return headings.get(agent_name, agent_name)
+
+    def _build_file_content(self, shared_rules, agent_rules, agent_name):
+        """Build file content with shared and agent-specific sections."""
+        lines = ["# Shared Rules"]
+        lines.extend(sorted(shared_rules))
+
+        agent_heading = f"## {self._get_agent_heading(agent_name)} Specific"
+        lines.append("")
+        lines.append(agent_heading)
+        lines.extend(sorted(agent_rules))
+
+        return '\n'.join(lines) + '\n'
 
     def _ensure_master_exists(self):
         """Ensure master file exists (create if needed)."""
