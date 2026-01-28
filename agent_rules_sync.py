@@ -47,6 +47,9 @@ class AgentRulesSync:
         # PID file for daemon mode
         self.pid_file = self.config_dir / "daemon.pid"
         self.watch_flag_file = self.config_dir / "watching"
+        
+        # Stop event for graceful Windows daemon shutdown
+        self.stop_event = threading.Event()
 
         # Agent configuration files (user-facing)
         self.agents = {
@@ -455,7 +458,8 @@ class AgentRulesSync:
                 for agent_id, config in self.agents.items():
                     file_hashes[agent_id] = self._get_file_hash(config["path"])
 
-                while True:
+                # Use stop_event to allow graceful shutdown
+                while not self.stop_event.is_set():
                     time.sleep(3)
 
                     master_hash = self._get_file_hash(self.master_file)
@@ -498,16 +502,21 @@ class AgentRulesSync:
                 pid = int(f.read().strip())
 
             if sys.platform == "win32":
-                # Windows: Just remove PID file (thread will clean up)
+                # Windows: Signal stop event (thread checks this flag)
+                self.stop_event.set()
                 print(f"✓ Daemon stop requested (PID: {pid})")
             else:
                 # Unix: Send SIGTERM
                 os.kill(pid, signal.SIGTERM)
                 print(f"✓ Daemon stopped (PID: {pid})")
-
-            self.pid_file.unlink()
         except (OSError, ValueError) as e:
             print(f"❌ Error stopping daemon: {e}")
+        finally:
+            # Always cleanup PID file, even on error
+            try:
+                self.pid_file.unlink()
+            except OSError:
+                pass
 
 
 def main():
