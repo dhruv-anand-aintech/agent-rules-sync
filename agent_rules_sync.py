@@ -177,31 +177,54 @@ class AgentRulesSync:
         try:
             self._ensure_master_exists()
 
-            # Read master
+            # Step 1: Read master file and extract sections
             with open(self.master_file, 'r') as f:
                 master_content = f.read()
 
-            # Collect all rules from all agents
-            all_agent_content = master_content
+            master_shared = self._extract_shared_rules(master_content)
+            master_agent_rules = {}
+            for agent_id in self.agents:
+                master_agent_rules[agent_id] = self._extract_agent_rules(master_content, agent_id)
+
+            # Step 2: Merge rules from all agent files
             for agent_id, config in self.agents.items():
-                if config["path"].exists():
+                agent_path = config["path"]
+                if agent_path.exists():
                     try:
-                        with open(config["path"], 'r') as f:
+                        with open(agent_path, 'r') as f:
                             agent_content = f.read()
-                        all_agent_content = self._merge_rules(all_agent_content, agent_content)
+
+                        # Merge shared rules
+                        agent_shared = self._extract_shared_rules(agent_content)
+                        master_shared.update(agent_shared)
+
+                        # Merge agent-specific rules
+                        agent_specific = self._extract_agent_rules(agent_content, agent_id)
+                        master_agent_rules[agent_id].update(agent_specific)
                     except Exception:
                         pass
 
-            # Update master with merged rules
+            # Step 3: Rebuild and write master file
+            master_lines = ["# Shared Rules"]
+            master_lines.extend(sorted(master_shared))
+
+            for agent_id in self.agents:
+                agent_heading = f"## {self._get_agent_heading(agent_id)} Specific"
+                master_lines.append("")
+                master_lines.append(agent_heading)
+                master_lines.extend(sorted(master_agent_rules[agent_id]))
+
+            master_text = '\n'.join(master_lines) + '\n'
+
             if self.master_file.exists():
                 backup_path = self._backup_file(self.master_file, "master")
                 if backup_path:
                     self._log_message(f"Backed up master: {backup_path.name}")
 
             with open(self.master_file, 'w') as f:
-                f.write(all_agent_content)
+                f.write(master_text)
 
-            # Push merged rules to all agents
+            # Step 4: Write agent files (shared rules + their section)
             for agent_id, config in self.agents.items():
                 agent_path = config["path"]
                 try:
@@ -212,10 +235,15 @@ class AgentRulesSync:
                         if backup_path:
                             self._log_message(f"Backed up {agent_id}: {backup_path.name}")
 
+                    content = self._build_file_content(
+                        master_shared,
+                        master_agent_rules[agent_id],
+                        agent_id
+                    )
                     with open(agent_path, 'w') as f:
-                        f.write(all_agent_content)
-                except Exception:
-                    pass
+                        f.write(content)
+                except Exception as e:
+                    self._log_error(f"Error syncing {agent_id}: {e}")
         except Exception as e:
             self._log_error(f"Sync error: {e}")
 
