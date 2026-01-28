@@ -86,12 +86,12 @@ class AgentRulesSync:
                 "description": "Config root AGENTS file",
             },
             "agent": {
-                "name": "Local Agent (AGENTS.md)",
+                "name": "Local Agent",
                 "path": Path.home() / ".agent" / "AGENTS.md",
                 "description": "Local agent configuration",
             },
             "agent-alt": {
-                "name": "Local Agent (AGENT.md)",
+                "name": "Local Agent Alt",
                 "path": Path.home() / ".agent" / "AGENT.md",
                 "description": "Local agent configuration (alternate)",
             }
