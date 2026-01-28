@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0] - 2026-01-28
+
+### Added
+- **5 new agent configuration locations** for broader compatibility:
+  - `~/.config/agents/AGENTS.md` (Config Agents)
+  - `~/.codex/AGENTS.md` (Codex)
+  - `~/.config/AGENTS.md` (Config root)
+  - `~/.agent/AGENTS.md` (Local Agent)
+  - `~/.agent/AGENT.md` (Local Agent alternate)
+- All 9 agent locations now automatically synced
+- Updated README with all supported locations
+
 ## [1.1.1] - 2026-01-28
 
 ### Fixed
