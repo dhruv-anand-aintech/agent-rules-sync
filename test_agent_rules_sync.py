@@ -51,3 +51,26 @@ def test_build_file_content():
     assert "- rule 2" in content
     assert "## Claude Code Specific" in content
     assert "- claude rule" in content
+
+def test_ensure_master_has_all_sections():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config_dir = Path(tmpdir)
+        master_file = config_dir / "RULES.md"
+
+        sync = AgentRulesSync()
+        sync.config_dir = config_dir
+        sync.master_file = master_file
+
+        # Create empty agent file
+        agent_path = config_dir / "test_agent.md"
+        agent_path.write_text("# Shared Rules\n- test rule\n")
+
+        sync.agents["test"] = {"path": agent_path, "name": "Test", "description": ""}
+        sync._ensure_master_exists()
+
+        content = master_file.read_text()
+        assert "# Shared Rules" in content
+        assert "## Claude Code Specific" in content
+        assert "## Cursor Specific" in content
+        assert "## Gemini Specific" in content
+        assert "## OpenCode Specific" in content

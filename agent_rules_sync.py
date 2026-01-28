@@ -146,20 +146,31 @@ class AgentRulesSync:
         return '\n'.join(lines) + '\n'
 
     def _ensure_master_exists(self):
-        """Ensure master file exists (create if needed)."""
+        """Ensure master file exists with all sections (create if needed)."""
         if not self.master_file.exists():
-            # Create from first available agent
+            # Build initial master with all sections
+            lines = ["# Shared Rules"]
+
+            # Try to extract shared rules from first available agent
             for agent_id, config in self.agents.items():
                 if config["path"].exists():
-                    with open(config["path"], 'r') as f:
-                        content = f.read()
-                    with open(self.master_file, 'w') as f:
-                        f.write(content)
-                    return
+                    try:
+                        with open(config["path"], 'r') as f:
+                            content = f.read()
+                        shared = self._extract_shared_rules(content)
+                        lines.extend(sorted(shared))
+                        break
+                    except Exception:
+                        pass
 
-            # No agent files exist, create empty master
+            # Add agent-specific sections
+            for agent_id in self.agents:
+                agent_heading = f"## {self._get_agent_heading(agent_id)} Specific"
+                lines.append("")
+                lines.append(agent_heading)
+
             with open(self.master_file, 'w') as f:
-                f.write("# Agent Rules\n")
+                f.write('\n'.join(lines) + '\n')
 
     def sync(self):
         """Sync rules from all sources to master and back to all agents."""
