@@ -25,25 +25,6 @@ class InstallWithDaemon(install):
             print("   agent-rules-sync")
 
 
-# Read version from pyproject.toml (single source of truth)
-def get_version():
-    """Read version from pyproject.toml."""
-    import tomllib if sys.version_info >= (3, 11) else tomli
-    
-    if sys.version_info >= (3, 11):
-        import tomllib
-    else:
-        try:
-            import tomli as tomllib
-        except ImportError:
-            # Fallback if tomli not installed
-            return "1.2.1"
-    
-    with open("pyproject.toml", "rb") as f:
-        data = tomllib.load(f)
-    return data["project"]["version"]
-
-
 setup(
     cmdclass={"install": InstallWithDaemon},
 )
