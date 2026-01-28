@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
-from setuptools import setup
-from setuptools.command.install import install
+"""
+Setup script for Agent Rules Sync.
+
+This minimal setup.py preserves the custom install hook for daemon installation.
+All other configuration is in pyproject.toml (modern standard).
+"""
 import subprocess
 import sys
-
-with open("README.md", "r", encoding="utf-8") as fh:
-    long_description = fh.read()
+from pathlib import Path
+from setuptools import setup
+from setuptools.command.install import install
 
 
 class InstallWithDaemon(install):
-    """Custom install command that sets up daemon after installation"""
+    """Custom install command that sets up daemon after installation."""
+
     def run(self):
         install.run(self)
         # Run daemon installer after package is installed
@@ -20,36 +25,25 @@ class InstallWithDaemon(install):
             print("   agent-rules-sync")
 
 
+# Read version from pyproject.toml (single source of truth)
+def get_version():
+    """Read version from pyproject.toml."""
+    import tomllib if sys.version_info >= (3, 11) else tomli
+    
+    if sys.version_info >= (3, 11):
+        import tomllib
+    else:
+        try:
+            import tomli as tomllib
+        except ImportError:
+            # Fallback if tomli not installed
+            return "1.2.1"
+    
+    with open("pyproject.toml", "rb") as f:
+        data = tomllib.load(f)
+    return data["project"]["version"]
+
+
 setup(
-    name="agent-rules-sync",
-    version="1.0.0",
-    author="Agent Rules Sync Contributors",
-    description="Synchronize rules across AI coding assistants (Claude Code, Cursor, Gemini, OpenCode)",
-    long_description=long_description,
-    long_description_content_type="text/markdown",
-    url="https://github.com/dhruv-anand-aintech/agent-rules-sync",
-    py_modules=["agent_rules_sync", "install_daemon"],
-    cmdclass={
-        'install': InstallWithDaemon,
-    },
-    classifiers=[
-        "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.8",
-        "Programming Language :: Python :: 3.9",
-        "Programming Language :: Python :: 3.10",
-        "Programming Language :: Python :: 3.11",
-        "Programming Language :: Python :: 3.12",
-        "License :: OSI Approved :: MIT License",
-        "Operating System :: OS Independent",
-        "Development Status :: 5 - Production/Stable",
-        "Intended Audience :: Developers",
-        "Topic :: Software Development :: Libraries :: Application Frameworks",
-        "Environment :: Console",
-    ],
-    python_requires=">=3.8",
-    entry_points={
-        "console_scripts": [
-            "agent-rules-sync=agent_rules_sync:main",
-        ],
-    },
+    cmdclass={"install": InstallWithDaemon},
 )

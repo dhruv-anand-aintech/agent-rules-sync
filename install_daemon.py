@@ -124,36 +124,117 @@ WantedBy=default.target
 
 
 def install_windows():
-    """Install as Windows background daemon (via Python)"""
-    daemon_script = str(Path.home() / ".config" / "agent-rules-sync" / "run_daemon.py")
-    Path(daemon_script).parent.mkdir(parents=True, exist_ok=True)
+    """Install as Windows background daemon using Task Scheduler (most reliable)."""
+    config_dir = Path.home() / ".config" / "agent-rules-sync"
+    config_dir.mkdir(parents=True, exist_ok=True)
 
-    script_content = f'''#!/usr/bin/env python3
-import sys
-import os
-os.chdir(os.path.expanduser("~"))
-from agent_rules_sync import AgentRulesSync
-syncer = AgentRulesSync()
-syncer.daemon_start()
-'''
+    # Try Task Scheduler first (more reliable than startup folder)
+    if _try_install_task_scheduler():
+        return True
+    
+    # Fallback: Use startup folder batch file
+    print("⚠️  Task Scheduler installation failed, using startup folder fallback...")
+    return _install_windows_startup_folder()
 
-    with open(daemon_script, 'w') as f:
-        f.write(script_content)
 
-    # Create batch file to run at startup
+def _try_install_task_scheduler():
+    """Try to install using Windows Task Scheduler (requires admin or user task)."""
+    try:
+        python_exe = sys.executable
+        config_dir = Path.home() / ".config" / "agent-rules-sync"
+        log_dir = str(config_dir)
+        
+        # Create task XML for Task Scheduler
+        task_xml = f'''<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.3" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Agent Rules Sync - Synchronize rules across AI coding assistants</Description>
+    <URI>\\Agent Rules Sync\\</URI>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>$(Arg0)</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>"{python_exe}"</Command>
+      <Arguments>-m agent_rules_sync</Arguments>
+    </Exec>
+  </Actions>
+</Task>'''
+
+        # Write XML to temp file
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.xml', delete=False) as f:
+            f.write(task_xml)
+            xml_path = f.name
+
+        try:
+            # Try to create task
+            result = subprocess.run(
+                ["schtasks", "/create", "/tn", "agent-rules-sync", 
+                 "/xml", xml_path, "/f"],
+                capture_output=True,
+                timeout=10
+            )
+            
+            if result.returncode == 0:
+                print(f"✓ Windows daemon installed via Task Scheduler")
+                print(f"  Task: agent-rules-sync")
+                print(f"  Runs at: User logon")
+                print(f"  Logs to: {log_dir}\\daemon.log")
+                return True
+            else:
+                return False
+        finally:
+            # Clean up temp file
+            try:
+                Path(xml_path).unlink()
+            except Exception:
+                pass
+
+    except Exception:
+        return False
+
+
+def _install_windows_startup_folder():
+    """Fallback: Install batch file in startup folder."""
     startup_dir = Path.home() / "AppData" / "Roaming" / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
     startup_dir.mkdir(parents=True, exist_ok=True)
 
     batch_file = startup_dir / "agent-rules-sync.bat"
 
     batch_content = f'''@echo off
+REM Agent Rules Sync daemon
 python -m agent_rules_sync
 '''
 
     with open(batch_file, 'w') as f:
         f.write(batch_content)
 
-    print(f"✓ Windows daemon configured")
+    print(f"✓ Windows daemon configured (startup folder)")
     print(f"  Batch file: {batch_file}")
     print(f"  Service will start on next login")
     print(f"  To start now, run: python -m agent_rules_sync")

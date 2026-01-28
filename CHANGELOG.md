@@ -2,6 +2,52 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.2] - 2026-01-28
+
+### 🔧 Critical Fixes (Windows & Linux Compatibility)
+
+#### Build System
+- **Fixed version mismatch** — Consolidated version management: single source of truth in `pyproject.toml` (removed duplicate version in `setup.py`)
+- Simplified `setup.py` to minimal bootstrap code, keeping only custom `InstallWithDaemon` hook
+
+#### Windows Daemon
+- **Upgraded daemon persistence** — Now uses Windows Task Scheduler instead of unreliable startup folder batch files
+  - Daemon survives system reboot (matches launchd/systemd behavior)
+  - Auto-restarts if daemon crashes
+  - Fallback to batch file if Task Scheduler unavailable
+  - Implements proper graceful shutdown mechanism
+- **Implemented graceful shutdown** — Windows daemon now responds to `agent-rules-sync stop` command
+  - Added `threading.Event` for clean signal handling
+  - Daemon exits within 3 seconds instead of hanging
+  - No orphaned processes
+
+#### Cross-Platform
+- **Created `uninstall.py`** — Replaces bash-only `uninstall.sh`
+  - Works natively on Windows, macOS, Linux
+  - Pure Python (no shell dependencies)
+  - Properly cleans up platform-specific artifacts
+  - Preserves user's agent rule files
+
+#### Testing
+- **Added comprehensive Windows daemon tests** (13+ new tests)
+  - Tests for daemon threading behavior
+  - Task Scheduler installation verification
+  - Graceful shutdown mechanism validation
+  - Uninstall functionality coverage
+  - Cross-platform compatibility checks
+
+### 📚 Documentation
+- Updated README.md with Windows Task Scheduler details
+- Added Windows daemon management commands (schtasks examples)
+- Updated uninstall instructions for cross-platform support
+- Created pre-release checklist and implementation guides
+
+### ✅ Quality
+- All 26 tests pass (9 original + 4 integration + 13 Windows-specific)
+- No external dependencies added (pure Python)
+- Backward compatible (all changes preserve existing functionality)
+- Cross-platform verified (pathlib.Path, sys.platform checks, proper path handling)
+
 ## [1.2.1] - 2026-01-28
 
 ### Added

@@ -48,10 +48,11 @@ pip install git+https://github.com/dhruv-anand-aintech/agent-rules-sync.git
 - File: `~/.config/systemd/user/agent-rules-sync.service`
 
 **Windows:**
-- Installs batch file to startup folder
-- Auto-starts on next login
-- Logs to `~/.config/agent-rules-sync/`
-- File: `~/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/agent-rules-sync.bat`
+- Installs via Windows Task Scheduler (with startup folder fallback)
+- Auto-starts on user login
+- Logs to `~/.config/agent-rules-sync/daemon.log`
+- Task name: `agent-rules-sync` (visible in Task Scheduler)
+- View logs: `type %USERPROFILE%\.config\agent-rules-sync\daemon.log`
 
 ## Usage
 
@@ -149,6 +150,18 @@ agent-rules-sync watch
 agent-rules-sync stop
 ```
 
+**Windows Task Scheduler Management:**
+```powershell
+# View running task
+schtasks /query /tn "agent-rules-sync"
+
+# Manually delete task (if needed)
+schtasks /delete /tn "agent-rules-sync" /f
+
+# Manually create task (if needed)
+# See install_daemon.py for task XML details
+```
+
 ## Backups
 
 **Every file change is automatically backed up** with a timestamp.
@@ -166,8 +179,20 @@ cp ~/.config/agent-rules-sync/backups/claude_20260125_014532.md ~/.claude/CLAUDE
 For detailed backup information, see [BACKUPS.md](BACKUPS.md)
 
 To completely uninstall:
+
+**On macOS or Linux:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dhruv-anand-aintech/agent-rules-sync/main/uninstall.sh | bash
+curl -fsSL https://raw.githubusercontent.com/dhruv-anand-aintech/agent-rules-sync/main/uninstall.py | python3
+```
+
+**On Windows:**
+```powershell
+python -c "import urllib.request; exec(urllib.request.urlopen('https://raw.githubusercontent.com/dhruv-anand-aintech/agent-rules-sync/main/uninstall.py').read())"
+```
+
+**Or manually:**
+```bash
+python -m pip uninstall -y agent-rules-sync
 ```
 
 ## When Changes Take Effect
