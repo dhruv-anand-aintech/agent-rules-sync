@@ -8,8 +8,19 @@ Edit rules in any AI agent → they automatically sync to all other agents.
 
 Works on **macOS**, **Linux**, and **Windows** (native + WSL).
 
-### One-Line Install
+### Quick Install
 
+**Using pip:**
+```bash
+pip install agent-rules-sync
+```
+
+**Using uv (faster):**
+```bash
+uv pip install agent-rules-sync
+```
+
+**From source:**
 ```bash
 pip install git+https://github.com/dhruv-anand-aintech/agent-rules-sync.git
 ```
