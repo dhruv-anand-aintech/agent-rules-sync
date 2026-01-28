@@ -59,6 +59,41 @@ pip install git+https://github.com/dhruv-anand-aintech/agent-rules-sync.git
 
 After installation, the daemon runs automatically in the background. Just start editing.
 
+### Shared vs Agent-Specific Rules
+
+Rules can be **shared** (sync to all agents) or **agent-specific** (stay local to one agent).
+
+**Shared Rules** sync to all agents automatically:
+```markdown
+# Shared Rules
+- use pydantic for validation  <- Appears in all agents
+- always test edge cases
+```
+
+**Agent-Specific Rules** stay local and don't sync to other agents:
+```markdown
+# Shared Rules
+- shared rule
+
+## Claude Code Specific
+- use claude-specific syntax  <- Only in Claude Code, doesn't sync elsewhere
+```
+
+Each agent file has the same structure:
+```markdown
+# Shared Rules
+- rule 1 (syncs everywhere)
+- rule 2
+
+## Claude Code Specific
+- claude local rule
+
+## Cursor Specific
+- cursor local rule
+```
+
+**Removing Rules** is simple - just delete the line from any agent file or the master, and it disappears on the next sync (backups preserve deleted rules).
+
 ### 1. Edit Rules Anywhere
 Pick any location and edit:
 ```bash
