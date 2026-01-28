@@ -183,28 +183,56 @@ For detailed technical information, see [AGENT_FILE_RELOAD.md](AGENT_FILE_RELOAD
 
 ## Example Workflow
 
+### Shared Rule (syncs everywhere)
+
 **Terminal 1:**
 ```bash
-$ agent-rules-sync
-Starting Agent Rules Sync daemon...
-✓ Daemon started (PID: 12345)
+$ agent-rules-sync watch
+🔄 Watching for changes (every 3s)...
 ```
 
 **Terminal 2:**
 ```bash
-$ echo "- use pydantic for validation" >> ~/.claude/CLAUDE.md
+# Add shared rule to Claude
+$ cat >> ~/.claude/CLAUDE.md << 'EOF'
+# Shared Rules
+- use pydantic for validation
+EOF
+
+[3 seconds later...]
 ```
 
-**Within 3 seconds, the rule appears in:**
-- `~/.cursor/rules/global.mdc`
-- `~/.gemini/GEMINI.md`
-- `~/.config/opencode/AGENTS.md`
+**Result:** Rule appears in all agents:
+- ✅ `~/.cursor/rules/global.mdc`
+- ✅ `~/.gemini/GEMINI.md`
+- ✅ `~/.config/opencode/AGENTS.md`
 
-✓ Done! No manual sync needed.
+### Agent-Specific Rule (stays local)
+
+**Terminal 2:**
+```bash
+# Add Claude-specific rule
+$ cat >> ~/.claude/CLAUDE.md << 'EOF'
+## Claude Code Specific
+- use claude-style syntax highlights
+EOF
+
+[3 seconds later...]
+```
+
+**Result:** Rule stays in Claude only
+- ✅ `~/.claude/CLAUDE.md` has the rule
+- ❌ `~/.cursor/rules/global.mdc` does NOT have it
+- ❌ Other agents unaffected
+
+✓ Done! Shared rules sync everywhere, agent-specific rules stay local.
 
 ## Features
 
-✓ **Bidirectional sync** — rules can be added anywhere
+✓ **Shared rules** — sync rules to all agents automatically
+✓ **Agent-specific rules** — keep rules local to one agent only
+✓ **Rule deletion** — just delete the line, it disappears on next sync
+✓ **Bidirectional sync** — rules can be added from any agent
 ✓ **Auto-deduplication** — same rule doesn't appear twice
 ✓ **Automatic backups** — timestamped backups before every change
 ✓ **Fire and forget** — daemon auto-starts and runs in background
@@ -226,15 +254,29 @@ No rules are lost!
 ## Architecture
 
 ```
-Your edits in any agent file
+Shared Rules (in # Shared Rules section)
          ↓
-    Daemon detects change
+    Daemon detects changes (every 3 seconds)
          ↓
-    Merge all rules
+    Extract shared + agent-specific rules
          ↓
-    Update all agents
+    Merge all sources bidirectionally
          ↓
-    Done! (rules synced everywhere)
+    Rebuild master with all sections
+         ↓
+    Sync: shared to all, agent-specific to their agent
+         ↓
+    Done! (rules synced, agent rules stay local)
+```
+
+**Master file structure:**
+```
+~/.config/agent-rules-sync/RULES.md
+├─ # Shared Rules (syncs to all agents)
+├─ ## Claude Code Specific (Claude only)
+├─ ## Cursor Specific (Cursor only)
+├─ ## Gemini Specific (Gemini only)
+└─ ## OpenCode Specific (OpenCode only)
 ```
 
 ## Monitoring
