@@ -32,6 +32,10 @@ fi
 echo "Stopping daemon..."
 agent-rules-sync stop 2>/dev/null || true
 
+# Kill any remaining agent-rules-sync processes
+pkill -f "agent-rules-sync" 2>/dev/null || true
+sleep 1
+
 # Uninstall package
 echo "Removing pip package..."
 pip uninstall -y agent-rules-sync 2>/dev/null || python3 -m pip uninstall -y agent-rules-sync 2>/dev/null || true
