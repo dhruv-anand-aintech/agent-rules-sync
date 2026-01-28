@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-rules-sync"
+version = "1.0.0"
+description = "Synchronize rules across AI coding assistants (Claude Code, Cursor, Gemini, OpenCode)"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Agent Rules Sync Contributors"},
+]
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Environment :: Console",
+]
+keywords = ["ai", "rules", "sync", "claude", "cursor", "gemini", "opencode"]
+
+[project.urls]
+"Homepage" = "https://github.com/dhruv-anand-aintech/agent-rules-sync"
+"Bug Tracker" = "https://github.com/dhruv-anand-aintech/agent-rules-sync/issues"
+"Repository" = "https://github.com/dhruv-anand-aintech/agent-rules-sync.git"
+"Changelog" = "https://github.com/dhruv-anand-aintech/agent-rules-sync/blob/main/CHANGELOG.md"
+
+[project.scripts]
+agent-rules-sync = "agent_rules_sync:main"
+
+[tool.setuptools]
+py-modules = ["agent_rules_sync", "install_daemon"]
