@@ -6,8 +6,19 @@ The Agent Rules Sync installation is designed to be **set-it-and-forget-it**:
 
 ### One-Command Installation
 
+**From PyPI (recommended):**
+```bash
+pip install agent-rules-sync
+```
+
+**From source:**
 ```bash
 pip install git+https://github.com/dhruv-anand-aintech/agent-rules-sync.git
+```
+
+**Using uv (faster):**
+```bash
+uv pip install agent-rules-sync
 ```
 
 ### During Installation
