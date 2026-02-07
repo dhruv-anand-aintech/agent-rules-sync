@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.3] - 2026-02-07
+
+### 🧪 Test Coverage Improvements
+
+- **Added daemon watch detection tests** — Two new integration tests catch file watching regressions:
+  - `test_daemon_watch_detects_master_file_changes`: Verifies master file changes are detected and synced to all agents
+  - `test_daemon_watch_detects_agent_file_changes`: Verifies agent file changes are merged to master and synced to all agents
+- Prevents breakage in the file hash-based change detection mechanism used by the daemon polling loop
+
 ## [1.2.2] - 2026-01-28
 
 ### 🔧 Critical Fixes (Windows & Linux Compatibility)
