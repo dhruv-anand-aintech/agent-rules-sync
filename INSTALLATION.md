@@ -6,14 +6,9 @@ The Agent Rules Sync installation is designed to be **set-it-and-forget-it**:
 
 ### One-Command Installation
 
-**From PyPI (recommended):**
+**Using pip (recommended):**
 ```bash
 pip install agent-rules-sync
-```
-
-**From source:**
-```bash
-pip install git+https://github.com/dhruv-anand-aintech/agent-rules-sync.git
 ```
 
 **Using uv (faster):**
@@ -147,10 +142,7 @@ If using an older Python, install a newer version first.
 If you get permission errors during installation:
 ```bash
 # Install for user only (recommended)
-pip install --user git+https://github.com/dhruv-anand-aintech/agent-rules-sync.git
-
-# Or use sudo (not recommended)
-sudo pip install git+https://github.com/dhruv-anand-aintech/agent-rules-sync.git
+pip install --user agent-rules-sync
 ```
 
 ### Service failed to install on macOS
@@ -322,6 +314,38 @@ If sync isn't working:
 - **GitHub Issues:** https://github.com/dhruv-anand-aintech/agent-rules-sync/issues
 - **Daemon Logs:** `~/.config/agent-rules-sync/daemon.log`
 - **Service Status:** `agent-rules-sync status`
+
+---
+
+## For Developers
+
+### Local Development Installation
+
+If you want to contribute to the project or test changes locally:
+
+**Clone the repository:**
+```bash
+git clone https://github.com/dhruv-anand-aintech/agent-rules-sync.git
+cd agent-rules-sync
+```
+
+**Install in editable mode:**
+```bash
+pip install -e .
+```
+
+This installs the package in "editable" mode, meaning:
+- Code changes are picked up immediately (no reinstall needed)
+- The daemon still works and auto-starts
+- Perfect for development and testing
+
+**Run tests:**
+```bash
+python -m pytest tests/ -v
+```
+
+**Create a new release:**
+See `.claude/CLAUDE.md` for the complete release workflow.
 
 ---
 
