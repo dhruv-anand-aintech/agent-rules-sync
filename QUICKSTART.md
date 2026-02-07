@@ -4,6 +4,12 @@ Get started in 1 minute!
 
 ## Install
 
+**Recommended (from PyPI):**
+```bash
+pip install agent-rules-sync
+```
+
+**Or from source:**
 ```bash
 pip install git+https://github.com/dhruv-anand-aintech/agent-rules-sync.git
 ```
