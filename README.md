@@ -266,6 +266,7 @@ EOF
 ✓ **Zero config** — works out of the box
 ✓ **Real-time** — syncs within 3 seconds
 ✓ **Safe recovery** — restore any previous version from backups
+✓ **Well-tested** — 28+ integration and unit tests with daemon watch coverage
 
 ## Merging Behavior
 
