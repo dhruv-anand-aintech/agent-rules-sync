@@ -114,7 +114,7 @@ def test_full_workflow_creates_missing_agents():
 
         # Initialize with only Claude file
         claude_file.write_text("# Shared Rules\n- shared rule\n## Claude Code Specific\n- claude specific\n")
-        
+
         # Cursor doesn't exist
         assert not cursor_file.exists()
 
@@ -128,3 +128,104 @@ def test_full_workflow_creates_missing_agents():
         assert "- shared rule" in cursor_content
         assert "## Cursor Specific" in cursor_content
         assert "- claude specific" not in cursor_content  # agent-specific rule stays in claude only
+
+def test_daemon_watch_detects_master_file_changes():
+    """Test: Watch mode detects changes to master file and syncs."""
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config_dir = Path(tmpdir)
+        master_file = config_dir / "RULES.md"
+        claude_file = config_dir / "claude.md"
+        cursor_file = config_dir / "cursor.md"
+
+        sync = AgentRulesSync()
+        sync.config_dir = config_dir
+        sync.master_file = master_file
+        sync.agents = {
+            "claude": {"path": claude_file, "name": "Claude Code", "description": ""},
+            "cursor": {"path": cursor_file, "name": "Cursor", "description": ""}
+        }
+
+        # Initialize
+        sync._ensure_master_exists()
+        sync.sync()
+
+        # Get initial hash
+        initial_master_hash = sync._get_file_hash(master_file)
+
+        # Modify master file (add a test rule to the shared section)
+        with open(master_file, 'r') as f:
+            content = f.read()
+
+        # Insert rule before the first agent-specific section
+        modified_content = content.replace(
+            "\n##",  # Before first agent section
+            "\n- new test rule\n##",
+            1
+        )
+
+        with open(master_file, 'w') as f:
+            f.write(modified_content)
+
+        # Sleep briefly to ensure file timestamp changes
+        time.sleep(0.1)
+
+        # Verify hash changed
+        modified_master_hash = sync._get_file_hash(master_file)
+        assert modified_master_hash != initial_master_hash, "Master file hash should change after edit"
+
+        # Run sync (simulating daemon detecting change)
+        sync.sync()
+
+        # Verify the rule propagated to agent files
+        claude_content = claude_file.read_text()
+        cursor_content = cursor_file.read_text()
+
+        assert "- new test rule" in claude_content, "New rule should appear in Claude file"
+        assert "- new test rule" in cursor_content, "New rule should appear in Cursor file"
+
+def test_daemon_watch_detects_agent_file_changes():
+    """Test: Watch mode detects changes to agent files and updates master."""
+    import time
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config_dir = Path(tmpdir)
+        master_file = config_dir / "RULES.md"
+        claude_file = config_dir / "claude.md"
+        cursor_file = config_dir / "cursor.md"
+
+        sync = AgentRulesSync()
+        sync.config_dir = config_dir
+        sync.master_file = master_file
+        sync.agents = {
+            "claude": {"path": claude_file, "name": "Claude Code", "description": ""},
+            "cursor": {"path": cursor_file, "name": "Cursor", "description": ""}
+        }
+
+        # Initialize
+        sync._ensure_master_exists()
+        sync.sync()
+
+        # Modify Claude agent file (add shared rule)
+        with open(claude_file, 'r') as f:
+            claude_content = f.read()
+
+        # Insert new shared rule before the agent-specific section
+        modified_claude = claude_content.replace(
+            "## Claude Code Specific",
+            "- agent-added rule\n\n## Claude Code Specific"
+        )
+
+        with open(claude_file, 'w') as f:
+            f.write(modified_claude)
+
+        time.sleep(0.1)
+
+        # Sync (simulate daemon)
+        sync.sync()
+
+        # Verify rule appears in master and other agents
+        master_content = master_file.read_text()
+        cursor_content = cursor_file.read_text()
+
+        assert "- agent-added rule" in master_content, "Rule from agent should appear in master"
+        assert "- agent-added rule" in cursor_content, "Rule from agent should propagate to other agents"
