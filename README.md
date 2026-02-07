@@ -20,11 +20,6 @@ pip install agent-rules-sync
 uv pip install agent-rules-sync
 ```
 
-**From source:**
-```bash
-pip install git+https://github.com/dhruv-anand-aintech/agent-rules-sync.git
-```
-
 **That's it!** The daemon installs and starts automatically.
 
 ### What Happens During Installation
