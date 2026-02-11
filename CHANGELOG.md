@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.5] - 2026-02-11
+
+### 🔍 Debugging & Logging Improvements
+
+#### Enhanced Deletion Logging
+Added detailed logging to help troubleshoot deletion issues and understand sync behavior:
+
+- **State comparison logging**: Shows rule counts at each stage
+  - `Checking deletions: X in prev, Y in master, Z in union`
+- **Deletion detection logging**: Logs when deletions are detected
+  - `Deletion detected from master: [rule preview]...`
+  - `Deletion detected from [agent]: [rule preview]...`
+- **Confirmation logging**: Reports number of rules removed
+  - `Removing N deleted rules`
+
+#### Benefits
+- Easier troubleshooting of sync issues
+- Better visibility into deletion detection process
+- Helps diagnose timing-related problems
+- Useful for debugging edge cases
+
+**Note**: The deletion feature from v1.2.4 works correctly. This release adds logging to make the process more transparent and easier to debug.
+
 ## [1.2.4] - 2026-02-11
 
 ### 🔥 Critical Bug Fix: Rule Deletion Now Works

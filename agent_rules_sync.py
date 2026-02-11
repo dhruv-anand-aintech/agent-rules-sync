@@ -284,11 +284,13 @@ class AgentRulesSync:
             if previous_shared is not None:
                 # Check if any previously-existing rule is now missing from ANY file
                 rules_to_delete = set()
+                self._log_message(f"Checking deletions: {len(previous_shared)} in prev, {len(master_shared)} in master, {len(all_shared_rules)} in union")
 
                 for rule in previous_shared:
                     # Check if rule was deleted from master
                     if rule not in master_shared:
                         rules_to_delete.add(rule)
+                        self._log_message(f"Deletion detected from master: {rule[:50]}...")
                         continue
 
                     # Check if rule was deleted from any agent
@@ -300,11 +302,14 @@ class AgentRulesSync:
                                 agent_shared = self._extract_shared_rules(agent_content)
                                 if rule not in agent_shared:
                                     rules_to_delete.add(rule)
+                                    self._log_message(f"Deletion detected from {agent_id}: {rule[:50]}...")
                                     break
                             except Exception:
                                 pass
 
                 # Remove deleted rules
+                if rules_to_delete:
+                    self._log_message(f"Removing {len(rules_to_delete)} deleted rules")
                 all_shared_rules -= rules_to_delete
 
             master_shared = all_shared_rules
