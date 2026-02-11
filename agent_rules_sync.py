@@ -47,7 +47,10 @@ class AgentRulesSync:
         # PID file for daemon mode
         self.pid_file = self.config_dir / "daemon.pid"
         self.watch_flag_file = self.config_dir / "watching"
-        
+
+        # State file to track previous sync (for detecting deletions)
+        self.state_file = self.config_dir / "sync_state.txt"
+
         # Stop event for graceful Windows daemon shutdown
         self.stop_event = threading.Event()
 
@@ -196,12 +199,58 @@ class AgentRulesSync:
             with open(self.master_file, 'w') as f:
                 f.write('\n'.join(lines) + '\n')
 
+    def _migrate_from_old_version(self):
+        """Migrate from versions without state file support."""
+        # If master exists but state file doesn't, this is an upgrade
+        if self.master_file.exists() and not self.state_file.exists():
+            try:
+                # Initialize state from current master file
+                with open(self.master_file, 'r') as f:
+                    content = f.read()
+                shared_rules = self._extract_shared_rules(content)
+                self._save_shared_rules_state(shared_rules)
+                self._log_message("Migrated to version with state tracking")
+            except Exception as e:
+                self._log_error(f"Migration error: {e}")
+
+    def _load_previous_shared_rules(self):
+        """Load shared rules from previous sync."""
+        if not self.state_file.exists():
+            return None
+        try:
+            with open(self.state_file, 'r') as f:
+                content = f.read()
+            return self._extract_shared_rules(content)
+        except Exception:
+            return None
+
+    def _save_shared_rules_state(self, shared_rules):
+        """Save current shared rules state."""
+        try:
+            with open(self.state_file, 'w') as f:
+                f.write("# Shared Rules\n")
+                for rule in sorted(shared_rules):
+                    f.write(f"{rule}\n")
+        except Exception:
+            pass
+
     def sync(self):
-        """Sync rules from all sources to master and back to all agents."""
+        """
+        Sync rules with smart deletion detection.
+
+        Strategy:
+        - Load previous state to detect deletions
+        - Union of all current rules (additions from any file)
+        - Subtract any rules that were in previous state but removed from ANY file
+        """
         try:
             self._ensure_master_exists()
+            self._migrate_from_old_version()
 
-            # Step 1: Read master file and extract sections
+            # Step 1: Load previous shared rules state
+            previous_shared = self._load_previous_shared_rules()
+
+            # Step 2: Read master file
             with open(self.master_file, 'r') as f:
                 master_content = f.read()
 
@@ -210,7 +259,9 @@ class AgentRulesSync:
             for agent_id in self.agents:
                 master_agent_rules[agent_id] = self._extract_agent_rules(master_content, agent_id)
 
-            # Step 2: Merge rules from all agent files
+            # Step 3: Collect all shared rules (union for additions)
+            all_shared_rules = set(master_shared)
+
             for agent_id, config in self.agents.items():
                 agent_path = config["path"]
                 if agent_path.exists():
@@ -218,15 +269,45 @@ class AgentRulesSync:
                         with open(agent_path, 'r') as f:
                             agent_content = f.read()
 
-                        # Merge shared rules
+                        # Union: Add any rules from this agent
                         agent_shared = self._extract_shared_rules(agent_content)
-                        master_shared.update(agent_shared)
+                        all_shared_rules.update(agent_shared)
 
                         # Merge agent-specific rules
                         agent_specific = self._extract_agent_rules(agent_content, agent_id)
                         master_agent_rules[agent_id].update(agent_specific)
                     except Exception:
                         pass
+
+            # Step 4: Detect deletions
+            # If we have previous state, remove rules that were deleted from ANY file
+            if previous_shared is not None:
+                # Check if any previously-existing rule is now missing from ANY file
+                rules_to_delete = set()
+
+                for rule in previous_shared:
+                    # Check if rule was deleted from master
+                    if rule not in master_shared:
+                        rules_to_delete.add(rule)
+                        continue
+
+                    # Check if rule was deleted from any agent
+                    for agent_id, config in self.agents.items():
+                        if config["path"].exists():
+                            try:
+                                with open(config["path"], 'r') as f:
+                                    agent_content = f.read()
+                                agent_shared = self._extract_shared_rules(agent_content)
+                                if rule not in agent_shared:
+                                    rules_to_delete.add(rule)
+                                    break
+                            except Exception:
+                                pass
+
+                # Remove deleted rules
+                all_shared_rules -= rules_to_delete
+
+            master_shared = all_shared_rules
 
             # Step 3: Rebuild and write master file
             master_lines = ["# Shared Rules"]
@@ -268,6 +349,9 @@ class AgentRulesSync:
                         f.write(content)
                 except Exception as e:
                     self._log_error(f"Error syncing {agent_id}: {e}")
+
+            # Step 5: Save current state for next sync's deletion detection
+            self._save_shared_rules_state(master_shared)
         except Exception as e:
             self._log_error(f"Sync error: {e}")
 

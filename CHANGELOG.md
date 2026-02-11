@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.4] - 2026-02-11
+
+### 🔥 Critical Bug Fix: Rule Deletion Now Works
+
+#### The Problem
+When users deleted a rule from the master file (or any agent file), it would get added back on the next sync. The sync logic used a simple "union" approach that only added rules but never removed them, making deletion impossible.
+
+#### The Solution
+Implemented **state-based deletion detection**:
+- **State tracking**: New `sync_state.txt` file tracks previous sync's shared rules
+- **Union for additions**: Any file can add new rules (all rules merged together)
+- **Deletion detection**: If a rule existed before but is now missing from ANY file, it's deleted everywhere
+- **Automatic migration**: Upgrading from old versions automatically creates state file (no user action needed)
+
+#### Changes
+- Added `~/.config/agent-rules-sync/sync_state.txt` for tracking previous sync state
+- Rewrote `sync()` method with hybrid strategy: union-based additions + state-based deletions
+- Added `_migrate_from_old_version()` to seamlessly upgrade existing installations
+- Added comprehensive test coverage (4 new tests for deletion and migration scenarios)
+
+#### User Experience
+- **Delete from master** → Propagates to all agents ✅
+- **Delete from any agent** → Propagates everywhere ✅
+- **Upgrade from v1.2.3** → Migration happens automatically ✅
+- **New install** → Works out of the box ✅
+
+#### Test Coverage
+- `test_delete_rule_from_master_only()` - Verifies deletion propagation
+- `test_migration_creates_state_file()` - Verifies migration creates state
+- `test_migration_preserves_existing_rules()` - Verifies no data loss
+- `test_upgrade_scenario_deletion_works_after_migration()` - Full upgrade test
+
+**Total: 34 tests (33 passed, 1 skipped)**
+
 ## [1.2.3] - 2026-02-07
 
 ### 🧪 Test Coverage Improvements

@@ -96,6 +96,49 @@ def test_full_workflow_rule_deletion():
         assert "- rule to delete" not in claude_content
         assert "- rule to delete" not in cursor_content
 
+def test_delete_rule_from_master_only():
+    """Test: Delete a rule from master file only - should propagate to all agents."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config_dir = Path(tmpdir)
+        master_file = config_dir / "RULES.md"
+        claude_file = config_dir / "claude.md"
+        cursor_file = config_dir / "cursor.md"
+
+        sync = AgentRulesSync()
+        sync.config_dir = config_dir
+        sync.master_file = master_file
+        sync.state_file = config_dir / "sync_state.txt"
+        sync.agents = {
+            "claude": {"path": claude_file, "name": "Claude Code", "description": ""},
+            "cursor": {"path": cursor_file, "name": "Cursor", "description": ""}
+        }
+
+        # Create initial state with rules
+        master_file.write_text("# Shared Rules\n- rule to delete\n- rule to keep\n## Claude Code Specific\n## Cursor Specific\n")
+        claude_file.write_text("# Shared Rules\n- rule to delete\n- rule to keep\n## Claude Code Specific\n")
+        cursor_file.write_text("# Shared Rules\n- rule to delete\n- rule to keep\n## Cursor Specific\n")
+
+        # First sync to establish state
+        sync.sync()
+
+        # User deletes rule from master file ONLY
+        master_file.write_text("# Shared Rules\n- rule to keep\n## Claude Code Specific\n## Cursor Specific\n")
+
+        # Sync again (daemon would detect master change and call sync)
+        sync.sync()
+
+        # Verify rule is deleted from all files
+        master_content = master_file.read_text()
+        claude_content = claude_file.read_text()
+        cursor_content = cursor_file.read_text()
+
+        assert "- rule to delete" not in master_content, "Rule should be deleted from master"
+        assert "- rule to delete" not in claude_content, "Rule should be deleted from Claude"
+        assert "- rule to delete" not in cursor_content, "Rule should be deleted from Cursor"
+        assert "- rule to keep" in master_content, "Other rule should remain"
+        assert "- rule to keep" in claude_content, "Other rule should remain"
+        assert "- rule to keep" in cursor_content, "Other rule should remain"
+
 def test_full_workflow_creates_missing_agents():
     """Test: Sync creates missing agent files with synced content."""
     with tempfile.TemporaryDirectory() as tmpdir:

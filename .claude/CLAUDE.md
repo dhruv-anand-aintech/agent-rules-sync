@@ -188,7 +188,39 @@ self.agents = {
 `~/.config/agent-rules-sync/RULES.md`
 
 ### Daemon Config
-`~/.config/agent-rules-sync/` (daemon.log, daemon.pid, backups/)
+`~/.config/agent-rules-sync/` contains:
+- `daemon.log` - Daemon activity log
+- `daemon.pid` - Process ID file
+- `sync_state.txt` - State tracking for deletion detection (auto-created)
+- `backups/` - Automatic backups of all synced files
+
+## Migration & Upgrades
+
+### Upgrading from Old Versions
+The package automatically migrates when upgrading:
+
+**What happens on first sync after upgrade:**
+1. Detects old installation (master file exists but no state file)
+2. Creates `sync_state.txt` from current master file
+3. Logs migration in `daemon.log`
+4. No data loss - all existing rules are preserved
+
+**Upgrade process:**
+```bash
+# Stop daemon
+agent-rules-sync stop
+
+# Upgrade package
+pip install --upgrade agent-rules-sync
+
+# Restart daemon (migration happens automatically on first sync)
+agent-rules-sync daemon
+```
+
+**What's new in state-based deletion:**
+- Deleting a rule from ANY file now propagates to all files
+- Previous versions would add deleted rules back from other files
+- State file tracks what existed before, enabling proper deletion detection
 
 ## Common Issues & Solutions
 
@@ -203,3 +235,9 @@ self.agents = {
 ### Issue: Daemon stops after reboot (macOS)
 - **Solution**: launchd plist installed at startup, should auto-restart
 - Check: `launchctl list | grep agent-rules-sync`
+
+### Issue: State file missing after upgrade
+- **Symptom**: Deletions not working after package upgrade
+- **Solution**: State file is auto-created on first sync after upgrade
+- **Verify**: Check for `~/.config/agent-rules-sync/sync_state.txt`
+- **Manual fix**: Run `agent-rules-sync stop && agent-rules-sync daemon`
