@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Agent Rules Sync - Synchronize rules across AI coding assistants
+Agent Rules Sync - Synchronize rules and skills across AI coding assistants
 
 Simple usage:
     agent-rules-sync              # Start auto-sync daemon
@@ -12,6 +12,10 @@ Edit your rules in any location:
     ~/.cursor/rules/global.mdc
     ~/.gemini/GEMINI.md
     ~/.config/opencode/AGENTS.md
+
+Skills sync across:
+    ~/.cursor/skills/, ~/.claude/skills/, ~/.codex/skills/,
+    ~/.gemini/antigravity/skills/, ~/.config/opencode/skills/, ~/.agents/skills/
 
 Changes are automatically synced to all agents!
 """
@@ -26,6 +30,8 @@ from pathlib import Path
 from datetime import datetime
 import shutil
 import signal
+
+from agent_skills_sync import AgentSkillsSync
 
 
 class AgentRulesSync:
@@ -53,6 +59,9 @@ class AgentRulesSync:
 
         # Stop event for graceful Windows daemon shutdown
         self.stop_event = threading.Event()
+
+        # Skills sync (syncs skills across Cursor, Claude, Codex, Gemini, OpenCode)
+        self.skills_sync = AgentSkillsSync(config_dir=self.config_dir)
 
         # Agent configuration files (user-facing)
         self.agents = {
@@ -357,6 +366,15 @@ class AgentRulesSync:
 
             # Step 5: Save current state for next sync's deletion detection
             self._save_shared_rules_state(master_shared)
+
+            # Step 6: Sync skills across frameworks
+            try:
+                self.skills_sync.sync(
+                    log_callback=self._log_message,
+                    backup_before_write=True,
+                )
+            except Exception as e:
+                self._log_error(f"Skills sync error: {e}")
         except Exception as e:
             self._log_error(f"Sync error: {e}")
 
@@ -382,21 +400,28 @@ class AgentRulesSync:
 
     def watch(self, interval=3):
         """Watch for changes and auto-sync."""
-        # Store initial hashes
+        # Store initial hashes for rules
         file_hashes = {}
         file_hashes["master"] = self._get_file_hash(self.master_file)
         for agent_id, config in self.agents.items():
             file_hashes[agent_id] = self._get_file_hash(config["path"])
 
+        # Store initial hashes for skills
+        skill_hashes = self.skills_sync.get_watch_paths_and_hashes()
+
         print(f"🔄 Watching for changes (every {interval}s)...")
-        print(f"Edit rules in any agent file - changes auto-sync!\n")
+        print(f"Edit rules or skills in any agent - changes auto-sync!\n")
         self._log_message("Watch started")
+
+        # Initial sync to ensure rules and skills are propagated
+        self.sync()
+        self._log_message("Initial sync complete")
 
         try:
             while True:
                 time.sleep(interval)
 
-                # Check if any file changed
+                # Check if any rules file changed
                 master_hash = self._get_file_hash(self.master_file)
                 changed = False
 
@@ -410,10 +435,15 @@ class AgentRulesSync:
                         changed = True
                         file_hashes[agent_id] = current_hash
 
+                # Check if any skills changed
+                if self.skills_sync.skills_changed(skill_hashes):
+                    changed = True
+                    skill_hashes = self.skills_sync.get_watch_paths_and_hashes()
+
                 if changed:
                     self.sync()
                     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    msg = f"✓ Synced rules across all agents"
+                    msg = f"✓ Synced rules and skills across all agents"
                     print(f"[{timestamp}] {msg}")
                     self._log_message(msg)
 
@@ -466,6 +496,15 @@ class AgentRulesSync:
                 print(f"   Status: ⚠️  Not found")
 
             print()
+
+        # Skills status
+        skill_count = len(
+            self.skills_sync._list_skills_in_dir(self.skills_sync.master_skills_dir)
+        )
+        print(f"📚 Skills: {skill_count} synced to {len(self.skills_sync.frameworks)} frameworks")
+        print(f"   Master: {self.skills_sync.master_skills_dir}")
+        print(f"   Backups: {self.skills_sync.backup_dir}")
+        print()
 
         print(f"{'='*70}\n")
 
@@ -546,6 +585,10 @@ class AgentRulesSync:
                 file_hashes["master"] = self._get_file_hash(self.master_file)
                 for agent_id, config in self.agents.items():
                     file_hashes[agent_id] = self._get_file_hash(config["path"])
+                skill_hashes = self.skills_sync.get_watch_paths_and_hashes()
+
+                # Initial sync
+                self.sync()
 
                 # Use stop_event to allow graceful shutdown
                 while not self.stop_event.is_set():
@@ -564,9 +607,13 @@ class AgentRulesSync:
                             changed = True
                             file_hashes[agent_id] = current_hash
 
+                    if self.skills_sync.skills_changed(skill_hashes):
+                        changed = True
+                        skill_hashes = self.skills_sync.get_watch_paths_and_hashes()
+
                     if changed:
                         self.sync()
-                        self._log_message("✓ Synced rules")
+                        self._log_message("✓ Synced rules and skills")
 
             except Exception as e:
                 self._log_error(str(e))
