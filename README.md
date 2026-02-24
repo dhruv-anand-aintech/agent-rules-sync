@@ -1,8 +1,8 @@
 # Agent Rules Sync
 
-**Synchronize your rules across Claude Code, Cursor, Gemini, and OpenCode in real-time.**
+**Synchronize your rules and skills across Claude Code, Cursor, Gemini, OpenCode, and Codex in real-time.**
 
-Edit rules in any AI agent → they automatically sync to all other agents.
+Edit rules or skills in any AI agent → they automatically sync to all other agents.
 
 ## Installation
 
@@ -26,7 +26,7 @@ uv pip install agent-rules-sync
 
 1. **Daemon is installed** as a system service (auto-starts on boot)
 2. **Service starts immediately** and runs in the background
-3. **Rules sync automatically** every 3 seconds
+3. **Rules and skills sync automatically** every 3 seconds
 
 ### Platform-Specific Installation
 
@@ -117,14 +117,55 @@ Just add or remove lines starting with `-`:
 ### 2. Changes Sync Automatically
 Within 3 seconds, your changes appear in all other agents! No manual sync needed.
 
+## Skills Sync
+
+Skills are directory-based: each skill is a folder containing `SKILL.md` and optional assets. Agent Rules Sync syncs **user-level skills** across all frameworks.
+
+### Skills Storage (synced across all)
+
+| Framework | Path |
+|-----------|------|
+| **Cursor** | `~/.cursor/skills/`, `~/.cursor/skills-cursor/` |
+| **Claude Code** | `~/.claude/skills/` |
+| **Codex** | `~/.codex/skills/` (or `$CODEX_HOME/skills`) |
+| **Gemini Antigravity** | `~/.gemini/antigravity/skills/` |
+| **OpenCode** | `~/.config/opencode/skills/` |
+| **Shared** | `~/.agents/skills/` (Codex, OpenCode, Claude-compatible) |
+
+### Adding or Editing Skills
+
+1. **Add a skill** in any of the paths above: create a folder with `SKILL.md` inside
+2. **Edit** the `SKILL.md` or add scripts/references in the folder
+3. Changes sync within 3 seconds to all other frameworks
+
+Example:
+```bash
+mkdir -p ~/.cursor/skills/my-skill
+echo '---
+name: my-skill
+description: My custom skill
+---
+# My Skill
+
+Instructions here.
+' > ~/.cursor/skills/my-skill/SKILL.md
+```
+
+### Skills Backups
+
+Skill directories are backed up to `~/.config/agent-rules-sync/skill_backups/` before any overwrite. See [BACKUPS.md](BACKUPS.md) for details.
+
+**Note:** Plugin-installed skills (e.g. from Cursor/Claude marketplaces) are NOT synced—they are managed by each framework's plugin system.
+
 ## How It Works
 
-1. **Daemon monitors** all 9 agent config file locations every 3 seconds
-   - Claude Code, Cursor, Gemini, OpenCode, Config Agents, Codex, Config root, Local Agent (2 variants)
-2. **Detects changes** in any file (master or agents)
-3. **Merges rules** from all sources (shared + agent-specific)
+1. **Daemon monitors** all 9 agent config file locations and all skill directories every 3 seconds
+   - Rules: Claude Code, Cursor, Gemini, OpenCode, Config Agents, Codex, Config root, Local Agent (2 variants)
+   - Skills: Cursor, Claude, Codex, Gemini, OpenCode, ~/.agents/skills
+2. **Detects changes** in any rules file or skill directory
+3. **Merges** rules from all sources (shared + agent-specific); unions skills from all locations
 4. **Syncs to all agents** automatically
-5. **Deduplicates** identical rules
+5. **Deduplicates** identical rules; for skills, newest version wins
 
 ### No User Master File
 
@@ -253,10 +294,11 @@ EOF
 
 ✓ **Shared rules** — sync rules to all agents automatically
 ✓ **Agent-specific rules** — keep rules local to one agent only
+✓ **Skills sync** — sync skill folders across Cursor, Claude, Codex, Gemini, OpenCode
 ✓ **Rule deletion** — just delete the line, it disappears on next sync
-✓ **Bidirectional sync** — rules can be added from any agent
+✓ **Bidirectional sync** — rules and skills can be added from any agent
 ✓ **Auto-deduplication** — same rule doesn't appear twice
-✓ **Automatic backups** — timestamped backups before every change
+✓ **Automatic backups** — timestamped backups before every change (rules + skills)
 ✓ **Fire and forget** — daemon auto-starts and runs in background
 ✓ **Zero config** — works out of the box
 ✓ **Real-time** — syncs within 3 seconds

@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0a1] - 2026-02-24 (Experimental)
+
+### ✨ Skills Sync
+
+Add synchronization of agent **skills** across all major agentic frameworks, in addition to existing rules sync.
+
+#### Framework Skill Paths (researched and implemented)
+
+| Framework | Storage Path | Notes |
+|-----------|--------------|-------|
+| **Cursor** | `~/.cursor/skills/`, `~/.cursor/skills-cursor/` | Both locations synced |
+| **Claude Code** | `~/.claude/skills/` | User skills (plugin cache excluded) |
+| **Codex** | `~/.codex/skills/` or `$CODEX_HOME/skills` | Respects CODEX_HOME |
+| **Gemini Antigravity** | `~/.gemini/antigravity/skills/` | |
+| **OpenCode** | `~/.config/opencode/skills/` | |
+| **Shared** | `~/.agents/skills/` | Codex, OpenCode, Claude-compatible |
+
+#### Features
+
+- **Union sync**: Skills from any framework are merged and propagated to all others
+- **Newest wins**: When same skill exists in multiple locations, most recently modified version is used
+- **Full directory copy**: Skills with scripts, references, and assets are fully synced
+- **Backups**: Timestamped backups in `~/.config/agent-rules-sync/skill_backups/` before overwrites
+- **Master storage**: Canonical skills at `~/.config/agent-rules-sync/skills/`
+
+#### How to Update
+
+- **Add skill**: Create folder with `SKILL.md` in any framework path; syncs within 3 seconds
+- **Edit skill**: Modify `SKILL.md` or add files; changes propagate
+- **Remove skill**: Delete the skill folder; removed on next sync (backups preserve it)
+
+#### Exclusions
+
+- Plugin-installed skills (e.g. `.claude/plugins/cache/`, `.codex/vendor_imports/`) are NOT synced
+- These are managed by each framework's marketplace/plugin system
+
+#### New Module
+
+- `agent_skills_sync.py` - standalone skills sync logic, integrated into main daemon
+
 ## [1.2.5] - 2026-02-11
 
 ### 🔍 Debugging & Logging Improvements
