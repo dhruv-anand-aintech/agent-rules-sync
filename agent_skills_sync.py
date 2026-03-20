@@ -86,6 +86,31 @@ class AgentSkillsSync:
             },
         }
 
+        # Load repo paths and add each repo's .claude/skills/ as a framework target.
+        # Config: ~/.config/agent-rules-sync/repo_paths.json
+        # Format: ["/abs/path/to/repo", "~/relative/path"]
+        self._load_repo_framework_paths()
+
+    def _load_repo_framework_paths(self):
+        """Add configured repos' .claude/skills/ dirs as sync targets."""
+        import json
+        repo_paths_file = self.config_dir / "repo_paths.json"
+        if not repo_paths_file.exists():
+            return
+        try:
+            repo_paths = json.loads(repo_paths_file.read_text())
+            for repo_path in repo_paths:
+                repo = Path(repo_path).expanduser().resolve()
+                if repo.is_dir():
+                    fw_id = f"repo:{repo.name}"
+                    self.frameworks[fw_id] = {
+                        "name": f"Repo: {repo.name}",
+                        "path": repo / ".claude" / "skills",
+                        "description": f"Project .claude/skills for {repo.name}",
+                    }
+        except Exception:
+            pass
+
     def _is_valid_skill_dir(self, path):
         """Return True if path is a skill directory (contains SKILL.md)."""
         return path.is_dir() and (path / self.SKILL_MD).exists()
@@ -176,12 +201,14 @@ class AgentSkillsSync:
                 log_callback(f"Error copying {src.name}: {e}")
             return False
 
-    def sync(self, log_callback=None, backup_before_write=True):
+    def sync(self, log_callback=None, backup_before_write=True, direction="bidirectional"):
         """
         Sync skills across all frameworks.
-        - Collect union of skill names from master + all framework dirs
-        - For each skill, use newest version as source
-        - Propagate to master and all framework directories
+
+        direction:
+          "bidirectional" — newest version wins, propagates to all (default)
+          "push"          — master → frameworks only (master is source of truth)
+          "pull"          — frameworks → master only (aggregate, don't push back)
         """
         log = log_callback or (lambda _: None)
 
@@ -190,19 +217,37 @@ class AgentSkillsSync:
             return
 
         for skill_name in sorted(all_skills):
-            result = self._get_newest_skill_source(skill_name)
-            if not result:
-                continue
-            src_path, _ = result
+            if direction == "push":
+                # Master is source of truth — only push master → frameworks
+                src_path = self.master_skills_dir / skill_name
+                if not self._is_valid_skill_dir(src_path):
+                    continue
+            elif direction == "pull":
+                # Aggregate newest from frameworks → master only, don't push back
+                result = self._get_newest_skill_source(skill_name)
+                if not result:
+                    continue
+                src_path, _ = result
+                master_dst = self.master_skills_dir / skill_name
+                if src_path != master_dst:
+                    if backup_before_write and master_dst.exists():
+                        self._backup_skill_dir(master_dst, "master")
+                    self._copy_skill(src_path, master_dst, log)
+                continue  # don't push to frameworks
+            else:  # bidirectional
+                result = self._get_newest_skill_source(skill_name)
+                if not result:
+                    continue
+                src_path, _ = result
 
-            # Write to master first
-            master_dst = self.master_skills_dir / skill_name
-            if src_path != master_dst:
-                if backup_before_write and master_dst.exists():
-                    self._backup_skill_dir(master_dst, "master")
-                self._copy_skill(src_path, master_dst, log)
+                # Write to master first
+                master_dst = self.master_skills_dir / skill_name
+                if src_path != master_dst:
+                    if backup_before_write and master_dst.exists():
+                        self._backup_skill_dir(master_dst, "master")
+                    self._copy_skill(src_path, master_dst, log)
 
-            # Propagate to all frameworks
+            # Propagate master → all frameworks
             for fw_id, fw in self.frameworks.items():
                 dst = fw["path"] / skill_name
                 if dst.exists() and backup_before_write:
