@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-rules-sync"
-version = "1.3.0a1"
+version = "1.4.0"
 description = "Synchronize rules and skills across AI coding assistants (Claude Code, Cursor, Gemini, OpenCode, Codex)"
 readme = "README.md"
 license = {text = "MIT"}
