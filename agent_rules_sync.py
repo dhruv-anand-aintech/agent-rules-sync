@@ -33,6 +33,7 @@ import signal
 
 from agent_skills_sync import AgentSkillsSync
 from agent_settings_sync import AgentSettingsSync
+from agent_sync_config import load_config, save_config, SyncConfig, DEFAULT_CONFIG, run_wizard
 
 
 class AgentRulesSync:
@@ -66,6 +67,9 @@ class AgentRulesSync:
 
         # Settings sync (syncs portable ~/.claude/settings.json to configured repos)
         self.settings_sync = AgentSettingsSync(config_dir=self.config_dir)
+
+        # Sync direction config
+        self.sync_config = load_config(self.config_dir)
 
         # Agent configuration files (user-facing)
         self.agents = {
@@ -371,44 +375,52 @@ class AgentRulesSync:
             with open(self.master_file, 'w') as f:
                 f.write(master_text)
 
-            # Step 4: Write agent files (shared rules + their section)
-            for agent_id, config in self.agents.items():
-                agent_path = config["path"]
-                try:
-                    agent_path.parent.mkdir(parents=True, exist_ok=True)
+            # Step 4: Write agent files — direction controls push/pull/bidirectional
+            rules_direction = self.sync_config.direction("rules")
+            rules_enabled = self.sync_config.enabled("rules")
 
-                    if agent_path.exists():
-                        backup_path = self._backup_file(agent_path, agent_id)
-                        if backup_path:
-                            self._log_message(f"Backed up {agent_id}: {backup_path.name}")
+            if rules_enabled and rules_direction in ("bidirectional", "push"):
+                for agent_id, config in self.agents.items():
+                    agent_path = config["path"]
+                    try:
+                        agent_path.parent.mkdir(parents=True, exist_ok=True)
 
-                    content = self._build_file_content(
-                        master_shared,
-                        master_agent_rules[agent_id],
-                        agent_id
-                    )
-                    with open(agent_path, 'w') as f:
-                        f.write(content)
-                except Exception as e:
-                    self._log_error(f"Error syncing {agent_id}: {e}")
+                        if agent_path.exists():
+                            backup_path = self._backup_file(agent_path, agent_id)
+                            if backup_path:
+                                self._log_message(f"Backed up {agent_id}: {backup_path.name}")
+
+                        content = self._build_file_content(
+                            master_shared,
+                            master_agent_rules[agent_id],
+                            agent_id
+                        )
+                        with open(agent_path, 'w') as f:
+                            f.write(content)
+                    except Exception as e:
+                        self._log_error(f"Error syncing {agent_id}: {e}")
 
             # Step 5: Save current state for next sync's deletion detection
             self._save_shared_rules_state(master_shared)
 
-            # Step 6: Sync skills across frameworks
-            try:
-                self.skills_sync.sync(
-                    log_callback=self._log_message,
-                    backup_before_write=True,
-                )
-            except Exception as e:
-                self._log_error(f"Skills sync error: {e}")
+            # Step 6: Sync skills across frameworks (respects direction config)
+            if self.sync_config.enabled("skills"):
+                try:
+                    direction = self.sync_config.direction("skills")
+                    self.skills_sync.sync(
+                        log_callback=self._log_message,
+                        backup_before_write=True,
+                        direction=direction,
+                    )
+                except Exception as e:
+                    self._log_error(f"Skills sync error: {e}")
 
             # Step 7: Sync portable settings + hooks to configured repos
-            try:
-                self.settings_sync.sync(log_callback=self._log_message)
-            except Exception as e:
-                self._log_error(f"Settings sync error: {e}")
+            if self.sync_config.enabled("settings"):
+                try:
+                    self.settings_sync.sync(log_callback=self._log_message)
+                except Exception as e:
+                    self._log_error(f"Settings sync error: {e}")
         except Exception as e:
             self._log_error(f"Sync error: {e}")
 
@@ -701,7 +713,7 @@ class AgentRulesSync:
 
 
 SYNC_SCOPES = ["rules", "skills", "settings", "all"]
-COMMANDS = ["sync", "status", "stop", "watch", "daemon"]
+COMMANDS = ["sync", "setup", "status", "stop", "watch", "daemon"]
 
 
 def _run_sync(syncer, scopes):
@@ -739,6 +751,7 @@ def main():
 Commands:
   agent-sync                         Start/ensure daemon is running
   agent-sync sync [scope ...]        One-shot sync (scopes: rules skills settings all)
+  agent-sync setup                   TUI wizard to configure sync directions
   agent-sync status                  Check daemon and sync status
   agent-sync stop                    Stop daemon
   agent-sync watch                   Watch in foreground (debugging)
@@ -756,7 +769,6 @@ Sync scope examples:
                         choices=COMMANDS,
                         help='Command to run (default: daemon)')
     parser.add_argument('scopes', nargs='*',
-                        choices=SYNC_SCOPES + [''],
                         metavar='SCOPE',
                         help=f'Scopes for sync command: {", ".join(SYNC_SCOPES)}')
 
@@ -772,6 +784,13 @@ Sync scope examples:
             print(f"  Valid scopes: {', '.join(SYNC_SCOPES)}")
             sys.exit(1)
         _run_sync(syncer, scopes)
+
+    elif args.command == 'setup':
+        from agent_sync_config import run_wizard, load_config
+        existing = load_config(syncer.config_dir)
+        cfg = run_wizard(syncer.config_dir, existing=existing)
+        if cfg:
+            syncer.sync_config = cfg
 
     elif args.command == 'watch':
         syncer.watch()
