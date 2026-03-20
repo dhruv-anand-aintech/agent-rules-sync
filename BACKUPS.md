@@ -13,6 +13,7 @@ Agent Rules Sync automatically creates timestamped backups every time it modifie
 
 ### Backup Location
 
+**Rules backups:**
 ```
 ~/.config/agent-rules-sync/backups/
 ├── claude_20260125_014532.md       # Claude Code backup
@@ -20,6 +21,15 @@ Agent Rules Sync automatically creates timestamped backups every time it modifie
 ├── gemini_20260125_014532.md       # Gemini backup
 ├── opencode_20260125_014532.md     # OpenCode backup
 └── master_20260125_014532.md       # Master rules backup
+```
+
+**Skills backups:** (timestamped skill folders before overwrite)
+```
+~/.config/agent-rules-sync/skill_backups/
+├── master_fix_20260125_014532/         # Master skill backup
+├── cursor_code-search_20260125_014532/ # Cursor skill backup
+├── claude_my-skill_20260125_014532/   # Claude skill backup
+└── codex_fix_20260125_014532/         # Codex skill backup
 ```
 
 ### Naming Convention
@@ -183,12 +193,19 @@ rm -rf ~/.config/agent-rules-sync/backups/*
 rm ~/.config/agent-rules-sync/backups/*20260124*
 ```
 
+**Skills backup cleanup:**
+```bash
+# Remove old skill backups (e.g., older than 30 days)
+find ~/.config/agent-rules-sync/skill_backups/ -mindepth 1 -maxdepth 1 -type d -mtime +30 -exec rm -rf {} +
+```
+
 ## Backup Safety
 
 ### What's Protected
 
 ✓ All agent configuration files (`CLAUDE.md`, `global.mdc`, `GEMINI.md`, `AGENTS.md`)
 ✓ Master rules file
+✓ All skill directories (before overwriting, in `skill_backups/`)
 ✓ All historical versions with timestamps
 
 ### What's Not Protected

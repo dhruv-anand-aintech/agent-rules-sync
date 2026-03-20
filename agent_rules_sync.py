@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Agent Rules Sync - Synchronize rules across AI coding assistants
+Agent Rules Sync - Synchronize rules and skills across AI coding assistants
 
 Simple usage:
     agent-rules-sync              # Start auto-sync daemon
@@ -12,6 +12,10 @@ Edit your rules in any location:
     ~/.cursor/rules/global.mdc
     ~/.gemini/GEMINI.md
     ~/.config/opencode/AGENTS.md
+
+Skills sync across:
+    ~/.cursor/skills/, ~/.claude/skills/, ~/.codex/skills/,
+    ~/.gemini/antigravity/skills/, ~/.config/opencode/skills/, ~/.agents/skills/
 
 Changes are automatically synced to all agents!
 """
@@ -26,6 +30,10 @@ from pathlib import Path
 from datetime import datetime
 import shutil
 import signal
+
+from agent_skills_sync import AgentSkillsSync
+from agent_settings_sync import AgentSettingsSync
+from agent_sync_config import load_config, save_config, SyncConfig, DEFAULT_CONFIG, run_wizard
 
 
 class AgentRulesSync:
@@ -53,6 +61,15 @@ class AgentRulesSync:
 
         # Stop event for graceful Windows daemon shutdown
         self.stop_event = threading.Event()
+
+        # Skills sync (syncs skills across Cursor, Claude, Codex, Gemini, OpenCode)
+        self.skills_sync = AgentSkillsSync(config_dir=self.config_dir)
+
+        # Settings sync (syncs portable ~/.claude/settings.json to configured repos)
+        self.settings_sync = AgentSettingsSync(config_dir=self.config_dir)
+
+        # Sync direction config
+        self.sync_config = load_config(self.config_dir)
 
         # Agent configuration files (user-facing)
         self.agents = {
@@ -102,6 +119,30 @@ class AgentRulesSync:
                 "description": "Local agent configuration (alternate)",
             }
         }
+
+        # Load repo paths and add each repo's CLAUDE.md as a sync target.
+        # Uses the same repo_paths.json as agent_skills_sync.
+        self._load_repo_agent_paths()
+
+    def _load_repo_agent_paths(self):
+        """Add configured repos' CLAUDE.md as rules sync targets."""
+        import json
+        repo_paths_file = self.config_dir / "repo_paths.json"
+        if not repo_paths_file.exists():
+            return
+        try:
+            repo_paths = json.loads(repo_paths_file.read_text())
+            for repo_path in repo_paths:
+                repo = Path(repo_path).expanduser().resolve()
+                if repo.is_dir():
+                    agent_id = f"repo:{repo.name}"
+                    self.agents[agent_id] = {
+                        "name": f"Repo: {repo.name}",
+                        "path": repo / "CLAUDE.md",
+                        "description": f"Project CLAUDE.md for {repo.name}",
+                    }
+        except Exception:
+            pass
 
     def _get_file_hash(self, filepath):
         """Calculate SHA256 hash of a file."""
@@ -334,29 +375,52 @@ class AgentRulesSync:
             with open(self.master_file, 'w') as f:
                 f.write(master_text)
 
-            # Step 4: Write agent files (shared rules + their section)
-            for agent_id, config in self.agents.items():
-                agent_path = config["path"]
-                try:
-                    agent_path.parent.mkdir(parents=True, exist_ok=True)
+            # Step 4: Write agent files — direction controls push/pull/bidirectional
+            rules_direction = self.sync_config.direction("rules")
+            rules_enabled = self.sync_config.enabled("rules")
 
-                    if agent_path.exists():
-                        backup_path = self._backup_file(agent_path, agent_id)
-                        if backup_path:
-                            self._log_message(f"Backed up {agent_id}: {backup_path.name}")
+            if rules_enabled and rules_direction in ("bidirectional", "push"):
+                for agent_id, config in self.agents.items():
+                    agent_path = config["path"]
+                    try:
+                        agent_path.parent.mkdir(parents=True, exist_ok=True)
 
-                    content = self._build_file_content(
-                        master_shared,
-                        master_agent_rules[agent_id],
-                        agent_id
-                    )
-                    with open(agent_path, 'w') as f:
-                        f.write(content)
-                except Exception as e:
-                    self._log_error(f"Error syncing {agent_id}: {e}")
+                        if agent_path.exists():
+                            backup_path = self._backup_file(agent_path, agent_id)
+                            if backup_path:
+                                self._log_message(f"Backed up {agent_id}: {backup_path.name}")
+
+                        content = self._build_file_content(
+                            master_shared,
+                            master_agent_rules[agent_id],
+                            agent_id
+                        )
+                        with open(agent_path, 'w') as f:
+                            f.write(content)
+                    except Exception as e:
+                        self._log_error(f"Error syncing {agent_id}: {e}")
 
             # Step 5: Save current state for next sync's deletion detection
             self._save_shared_rules_state(master_shared)
+
+            # Step 6: Sync skills across frameworks (respects direction config)
+            if self.sync_config.enabled("skills"):
+                try:
+                    direction = self.sync_config.direction("skills")
+                    self.skills_sync.sync(
+                        log_callback=self._log_message,
+                        backup_before_write=True,
+                        direction=direction,
+                    )
+                except Exception as e:
+                    self._log_error(f"Skills sync error: {e}")
+
+            # Step 7: Sync portable settings + hooks to configured repos
+            if self.sync_config.enabled("settings"):
+                try:
+                    self.settings_sync.sync(log_callback=self._log_message)
+                except Exception as e:
+                    self._log_error(f"Settings sync error: {e}")
         except Exception as e:
             self._log_error(f"Sync error: {e}")
 
@@ -382,21 +446,29 @@ class AgentRulesSync:
 
     def watch(self, interval=3):
         """Watch for changes and auto-sync."""
-        # Store initial hashes
+        # Store initial hashes for rules
         file_hashes = {}
         file_hashes["master"] = self._get_file_hash(self.master_file)
         for agent_id, config in self.agents.items():
             file_hashes[agent_id] = self._get_file_hash(config["path"])
 
+        # Store initial hashes for skills and settings
+        skill_hashes = self.skills_sync.get_watch_paths_and_hashes()
+        settings_hashes = self.settings_sync.get_watch_hashes()
+
         print(f"🔄 Watching for changes (every {interval}s)...")
-        print(f"Edit rules in any agent file - changes auto-sync!\n")
+        print(f"Edit rules or skills in any agent - changes auto-sync!\n")
         self._log_message("Watch started")
+
+        # Initial sync to ensure rules and skills are propagated
+        self.sync()
+        self._log_message("Initial sync complete")
 
         try:
             while True:
                 time.sleep(interval)
 
-                # Check if any file changed
+                # Check if any rules file changed
                 master_hash = self._get_file_hash(self.master_file)
                 changed = False
 
@@ -410,10 +482,20 @@ class AgentRulesSync:
                         changed = True
                         file_hashes[agent_id] = current_hash
 
+                # Check if any skills changed
+                if self.skills_sync.skills_changed(skill_hashes):
+                    changed = True
+                    skill_hashes = self.skills_sync.get_watch_paths_and_hashes()
+
+                # Check if settings or hook scripts changed
+                if self.settings_sync.settings_changed(settings_hashes):
+                    changed = True
+                    settings_hashes = self.settings_sync.get_watch_hashes()
+
                 if changed:
                     self.sync()
                     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    msg = f"✓ Synced rules across all agents"
+                    msg = f"✓ Synced rules and skills across all agents"
                     print(f"[{timestamp}] {msg}")
                     self._log_message(msg)
 
@@ -466,6 +548,15 @@ class AgentRulesSync:
                 print(f"   Status: ⚠️  Not found")
 
             print()
+
+        # Skills status
+        skill_count = len(
+            self.skills_sync._list_skills_in_dir(self.skills_sync.master_skills_dir)
+        )
+        print(f"📚 Skills: {skill_count} synced to {len(self.skills_sync.frameworks)} frameworks")
+        print(f"   Master: {self.skills_sync.master_skills_dir}")
+        print(f"   Backups: {self.skills_sync.backup_dir}")
+        print()
 
         print(f"{'='*70}\n")
 
@@ -546,6 +637,11 @@ class AgentRulesSync:
                 file_hashes["master"] = self._get_file_hash(self.master_file)
                 for agent_id, config in self.agents.items():
                     file_hashes[agent_id] = self._get_file_hash(config["path"])
+                skill_hashes = self.skills_sync.get_watch_paths_and_hashes()
+                settings_hashes = self.settings_sync.get_watch_hashes()
+
+                # Initial sync
+                self.sync()
 
                 # Use stop_event to allow graceful shutdown
                 while not self.stop_event.is_set():
@@ -564,9 +660,17 @@ class AgentRulesSync:
                             changed = True
                             file_hashes[agent_id] = current_hash
 
+                    if self.skills_sync.skills_changed(skill_hashes):
+                        changed = True
+                        skill_hashes = self.skills_sync.get_watch_paths_and_hashes()
+
+                    if self.settings_sync.settings_changed(settings_hashes):
+                        changed = True
+                        settings_hashes = self.settings_sync.get_watch_hashes()
+
                     if changed:
                         self.sync()
-                        self._log_message("✓ Synced rules")
+                        self._log_message("✓ Synced rules and skills")
 
             except Exception as e:
                 self._log_error(str(e))
@@ -608,43 +712,96 @@ class AgentRulesSync:
                 pass
 
 
+SYNC_SCOPES = ["rules", "skills", "settings", "all"]
+COMMANDS = ["sync", "setup", "status", "stop", "watch", "daemon"]
+
+
+def _run_sync(syncer, scopes):
+    """Run a one-shot sync for the given scopes."""
+    logs = []
+    log = lambda m: logs.append(m) or print(f"  {m}")
+
+    if "rules" in scopes or "all" in scopes:
+        print("⟳ Syncing rules...")
+        syncer.sync()  # rules sync is baked into sync()
+
+    if "skills" in scopes or "all" in scopes:
+        print("⟳ Syncing skills...")
+        try:
+            syncer.skills_sync.sync(log_callback=log, backup_before_write=False)
+        except Exception as e:
+            print(f"  ✗ Skills error: {e}")
+
+    if "settings" in scopes or "all" in scopes:
+        print("⟳ Syncing settings...")
+        try:
+            syncer.settings_sync.sync(log_callback=log)
+        except Exception as e:
+            print(f"  ✗ Settings error: {e}")
+
+    print("✓ Done")
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description='Sync rules across AI coding assistants',
+        prog='agent-sync',
+        description='Sync rules, skills, and settings across AI coding assistants',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-The daemon runs automatically in the background after installation.
+Commands:
+  agent-sync                         Start/ensure daemon is running
+  agent-sync sync [scope ...]        One-shot sync (scopes: rules skills settings all)
+  agent-sync setup                   TUI wizard to configure sync directions
+  agent-sync status                  Check daemon and sync status
+  agent-sync stop                    Stop daemon
+  agent-sync watch                   Watch in foreground (debugging)
 
-Quick usage:
-  agent-rules-sync status    # Check daemon status
-  agent-rules-sync stop      # Stop daemon
-  agent-rules-sync watch     # Watch in foreground (for debugging)
-
-Edit any agent file to sync rules:
-  vim ~/.claude/CLAUDE.md
-  vim ~/.cursor/rules/global.mdc
-  vim ~/.gemini/GEMINI.md
-
-Changes sync automatically within 3 seconds!
+Sync scope examples:
+  agent-sync sync                    Sync everything (default)
+  agent-sync sync rules              Sync only CLAUDE.md / rules files
+  agent-sync sync skills             Sync only skills directories
+  agent-sync sync settings           Sync only .claude/settings.json + hooks
+  agent-sync sync rules skills       Sync rules and skills
         """
     )
 
     parser.add_argument('command', nargs='?', default='daemon',
-                       choices=['daemon', 'watch', 'status', 'stop'],
-                       help='Command to execute')
+                        choices=COMMANDS,
+                        help='Command to run (default: daemon)')
+    parser.add_argument('scopes', nargs='*',
+                        metavar='SCOPE',
+                        help=f'Scopes for sync command: {", ".join(SYNC_SCOPES)}')
 
     args = parser.parse_args()
-
     syncer = AgentRulesSync()
 
-    if args.command == 'watch':
+    if args.command == 'sync':
+        scopes = args.scopes if args.scopes else ['all']
+        # Validate scopes
+        invalid = [s for s in scopes if s not in SYNC_SCOPES]
+        if invalid:
+            print(f"✗ Unknown scopes: {', '.join(invalid)}")
+            print(f"  Valid scopes: {', '.join(SYNC_SCOPES)}")
+            sys.exit(1)
+        _run_sync(syncer, scopes)
+
+    elif args.command == 'setup':
+        from agent_sync_config import run_wizard, load_config
+        existing = load_config(syncer.config_dir)
+        cfg = run_wizard(syncer.config_dir, existing=existing)
+        if cfg:
+            syncer.sync_config = cfg
+
+    elif args.command == 'watch':
         syncer.watch()
+
     elif args.command == 'status':
         syncer.status()
+
     elif args.command == 'stop':
         syncer.daemon_stop()
+
     else:  # daemon (default)
-        # Just ensure daemon is running
         if syncer.pid_file.exists():
             try:
                 with open(syncer.pid_file) as f:
@@ -657,7 +814,6 @@ Changes sync automatically within 3 seconds!
                 return
             except (OSError, ValueError):
                 pass
-
         syncer.daemon_start()
 
 
