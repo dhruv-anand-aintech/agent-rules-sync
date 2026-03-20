@@ -700,43 +700,89 @@ class AgentRulesSync:
                 pass
 
 
+SYNC_SCOPES = ["rules", "skills", "settings", "all"]
+COMMANDS = ["sync", "status", "stop", "watch", "daemon"]
+
+
+def _run_sync(syncer, scopes):
+    """Run a one-shot sync for the given scopes."""
+    logs = []
+    log = lambda m: logs.append(m) or print(f"  {m}")
+
+    if "rules" in scopes or "all" in scopes:
+        print("⟳ Syncing rules...")
+        syncer.sync()  # rules sync is baked into sync()
+
+    if "skills" in scopes or "all" in scopes:
+        print("⟳ Syncing skills...")
+        try:
+            syncer.skills_sync.sync(log_callback=log, backup_before_write=False)
+        except Exception as e:
+            print(f"  ✗ Skills error: {e}")
+
+    if "settings" in scopes or "all" in scopes:
+        print("⟳ Syncing settings...")
+        try:
+            syncer.settings_sync.sync(log_callback=log)
+        except Exception as e:
+            print(f"  ✗ Settings error: {e}")
+
+    print("✓ Done")
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description='Sync rules across AI coding assistants',
+        prog='agent-sync',
+        description='Sync rules, skills, and settings across AI coding assistants',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-The daemon runs automatically in the background after installation.
+Commands:
+  agent-sync                         Start/ensure daemon is running
+  agent-sync sync [scope ...]        One-shot sync (scopes: rules skills settings all)
+  agent-sync status                  Check daemon and sync status
+  agent-sync stop                    Stop daemon
+  agent-sync watch                   Watch in foreground (debugging)
 
-Quick usage:
-  agent-rules-sync status    # Check daemon status
-  agent-rules-sync stop      # Stop daemon
-  agent-rules-sync watch     # Watch in foreground (for debugging)
-
-Edit any agent file to sync rules:
-  vim ~/.claude/CLAUDE.md
-  vim ~/.cursor/rules/global.mdc
-  vim ~/.gemini/GEMINI.md
-
-Changes sync automatically within 3 seconds!
+Sync scope examples:
+  agent-sync sync                    Sync everything (default)
+  agent-sync sync rules              Sync only CLAUDE.md / rules files
+  agent-sync sync skills             Sync only skills directories
+  agent-sync sync settings           Sync only .claude/settings.json + hooks
+  agent-sync sync rules skills       Sync rules and skills
         """
     )
 
     parser.add_argument('command', nargs='?', default='daemon',
-                       choices=['daemon', 'watch', 'status', 'stop'],
-                       help='Command to execute')
+                        choices=COMMANDS,
+                        help='Command to run (default: daemon)')
+    parser.add_argument('scopes', nargs='*',
+                        choices=SYNC_SCOPES + [''],
+                        metavar='SCOPE',
+                        help=f'Scopes for sync command: {", ".join(SYNC_SCOPES)}')
 
     args = parser.parse_args()
-
     syncer = AgentRulesSync()
 
-    if args.command == 'watch':
+    if args.command == 'sync':
+        scopes = args.scopes if args.scopes else ['all']
+        # Validate scopes
+        invalid = [s for s in scopes if s not in SYNC_SCOPES]
+        if invalid:
+            print(f"✗ Unknown scopes: {', '.join(invalid)}")
+            print(f"  Valid scopes: {', '.join(SYNC_SCOPES)}")
+            sys.exit(1)
+        _run_sync(syncer, scopes)
+
+    elif args.command == 'watch':
         syncer.watch()
+
     elif args.command == 'status':
         syncer.status()
+
     elif args.command == 'stop':
         syncer.daemon_stop()
+
     else:  # daemon (default)
-        # Just ensure daemon is running
         if syncer.pid_file.exists():
             try:
                 with open(syncer.pid_file) as f:
@@ -749,7 +795,6 @@ Changes sync automatically within 3 seconds!
                 return
             except (OSError, ValueError):
                 pass
-
         syncer.daemon_start()
 
 
