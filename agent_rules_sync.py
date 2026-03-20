@@ -32,6 +32,7 @@ import shutil
 import signal
 
 from agent_skills_sync import AgentSkillsSync
+from agent_settings_sync import AgentSettingsSync
 
 
 class AgentRulesSync:
@@ -62,6 +63,9 @@ class AgentRulesSync:
 
         # Skills sync (syncs skills across Cursor, Claude, Codex, Gemini, OpenCode)
         self.skills_sync = AgentSkillsSync(config_dir=self.config_dir)
+
+        # Settings sync (syncs portable ~/.claude/settings.json to configured repos)
+        self.settings_sync = AgentSettingsSync(config_dir=self.config_dir)
 
         # Agent configuration files (user-facing)
         self.agents = {
@@ -111,6 +115,30 @@ class AgentRulesSync:
                 "description": "Local agent configuration (alternate)",
             }
         }
+
+        # Load repo paths and add each repo's CLAUDE.md as a sync target.
+        # Uses the same repo_paths.json as agent_skills_sync.
+        self._load_repo_agent_paths()
+
+    def _load_repo_agent_paths(self):
+        """Add configured repos' CLAUDE.md as rules sync targets."""
+        import json
+        repo_paths_file = self.config_dir / "repo_paths.json"
+        if not repo_paths_file.exists():
+            return
+        try:
+            repo_paths = json.loads(repo_paths_file.read_text())
+            for repo_path in repo_paths:
+                repo = Path(repo_path).expanduser().resolve()
+                if repo.is_dir():
+                    agent_id = f"repo:{repo.name}"
+                    self.agents[agent_id] = {
+                        "name": f"Repo: {repo.name}",
+                        "path": repo / "CLAUDE.md",
+                        "description": f"Project CLAUDE.md for {repo.name}",
+                    }
+        except Exception:
+            pass
 
     def _get_file_hash(self, filepath):
         """Calculate SHA256 hash of a file."""
@@ -375,6 +403,12 @@ class AgentRulesSync:
                 )
             except Exception as e:
                 self._log_error(f"Skills sync error: {e}")
+
+            # Step 7: Sync portable settings + hooks to configured repos
+            try:
+                self.settings_sync.sync(log_callback=self._log_message)
+            except Exception as e:
+                self._log_error(f"Settings sync error: {e}")
         except Exception as e:
             self._log_error(f"Sync error: {e}")
 
@@ -406,8 +440,9 @@ class AgentRulesSync:
         for agent_id, config in self.agents.items():
             file_hashes[agent_id] = self._get_file_hash(config["path"])
 
-        # Store initial hashes for skills
+        # Store initial hashes for skills and settings
         skill_hashes = self.skills_sync.get_watch_paths_and_hashes()
+        settings_hashes = self.settings_sync.get_watch_hashes()
 
         print(f"🔄 Watching for changes (every {interval}s)...")
         print(f"Edit rules or skills in any agent - changes auto-sync!\n")
@@ -439,6 +474,11 @@ class AgentRulesSync:
                 if self.skills_sync.skills_changed(skill_hashes):
                     changed = True
                     skill_hashes = self.skills_sync.get_watch_paths_and_hashes()
+
+                # Check if settings or hook scripts changed
+                if self.settings_sync.settings_changed(settings_hashes):
+                    changed = True
+                    settings_hashes = self.settings_sync.get_watch_hashes()
 
                 if changed:
                     self.sync()
@@ -586,6 +626,7 @@ class AgentRulesSync:
                 for agent_id, config in self.agents.items():
                     file_hashes[agent_id] = self._get_file_hash(config["path"])
                 skill_hashes = self.skills_sync.get_watch_paths_and_hashes()
+                settings_hashes = self.settings_sync.get_watch_hashes()
 
                 # Initial sync
                 self.sync()
@@ -610,6 +651,10 @@ class AgentRulesSync:
                     if self.skills_sync.skills_changed(skill_hashes):
                         changed = True
                         skill_hashes = self.skills_sync.get_watch_paths_and_hashes()
+
+                    if self.settings_sync.settings_changed(settings_hashes):
+                        changed = True
+                        settings_hashes = self.settings_sync.get_watch_hashes()
 
                     if changed:
                         self.sync()
