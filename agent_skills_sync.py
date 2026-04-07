@@ -256,6 +256,37 @@ class AgentSkillsSync:
                     self.master_skills_dir / skill_name, dst, log
                 )
 
+    def delete_skill(self, skill_name, backup=True, log_callback=None):
+        """
+        Delete a skill from master and all framework directories.
+
+        Returns a dict with keys 'deleted' (list of paths removed) and
+        'not_found' (list of locations where the skill didn't exist).
+        """
+        log = log_callback or (lambda _: None)
+        deleted = []
+        not_found = []
+
+        locations = {"master": self.master_skills_dir}
+        for fw_id, fw in self.frameworks.items():
+            locations[fw_id] = fw["path"]
+
+        for loc_id, base in locations.items():
+            skill_path = base / skill_name
+            if skill_path.exists() and self._is_valid_skill_dir(skill_path):
+                if backup:
+                    self._backup_skill_dir(skill_path, loc_id)
+                try:
+                    shutil.rmtree(skill_path)
+                    deleted.append(skill_path)
+                    log(f"Deleted {skill_name} from {loc_id} ({skill_path})")
+                except Exception as e:
+                    log(f"Error deleting {skill_name} from {loc_id}: {e}")
+            else:
+                not_found.append(str(skill_path))
+
+        return {"deleted": deleted, "not_found": not_found}
+
     def get_watch_paths_and_hashes(self):
         """
         Return dict of {path: hash} for all skill dirs we monitor.

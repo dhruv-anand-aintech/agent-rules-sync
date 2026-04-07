@@ -713,7 +713,7 @@ class AgentRulesSync:
 
 
 SYNC_SCOPES = ["rules", "skills", "settings", "all"]
-COMMANDS = ["sync", "setup", "status", "stop", "watch", "daemon"]
+COMMANDS = ["sync", "delete-skill", "setup", "status", "stop", "watch", "daemon"]
 
 
 def _run_sync(syncer, scopes):
@@ -762,6 +762,7 @@ Sync scope examples:
   agent-sync sync skills             Sync only skills directories
   agent-sync sync settings           Sync only .claude/settings.json + hooks
   agent-sync sync rules skills       Sync rules and skills
+  agent-sync delete-skill <name>     Delete a skill from master and all frameworks
         """
     )
 
@@ -770,12 +771,27 @@ Sync scope examples:
                         help='Command to run (default: daemon)')
     parser.add_argument('scopes', nargs='*',
                         metavar='SCOPE',
-                        help=f'Scopes for sync command: {", ".join(SYNC_SCOPES)}')
+                        help=f'Scopes for sync command: {", ".join(SYNC_SCOPES)}. For delete-skill: the skill name to delete.')
 
     args = parser.parse_args()
     syncer = AgentRulesSync()
 
-    if args.command == 'sync':
+    if args.command == 'delete-skill':
+        if not args.scopes:
+            print("✗ Usage: agent-sync delete-skill <skill-name>")
+            sys.exit(1)
+        skill_name = args.scopes[0]
+        print(f"Deleting skill '{skill_name}' from all locations...")
+        result = syncer.skills_sync.delete_skill(
+            skill_name, backup=True, log_callback=print
+        )
+        if result["deleted"]:
+            print(f"\n✓ Deleted from {len(result['deleted'])} location(s).")
+        else:
+            print(f"✗ Skill '{skill_name}' not found in any location.")
+            sys.exit(1)
+
+    elif args.command == 'sync':
         scopes = args.scopes if args.scopes else ['all']
         # Validate scopes
         invalid = [s for s in scopes if s not in SYNC_SCOPES]
