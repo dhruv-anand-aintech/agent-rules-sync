@@ -172,6 +172,42 @@ tests/
 - Clear cache: `rm -rf dist/ build/ *.egg-info __pycache__`
 - Check setuptools: `python3.10 -m pip install --upgrade setuptools wheel`
 
+## Sync troubleshooting & recovery (field learnings)
+
+These notes speed up diagnosing “sync is broken” reports. Several past incidents were **false alarms** or **recoverable from backups**.
+
+### `status` shows everything “Out of sync” — often not a real failure
+- `status()` compares **SHA256 of each agent file** to **SHA256 of the master `RULES.md`** (`agent_hash == master_hash`).
+- Agent files are **not byte-identical** to the master by design: the master contains **every** `## … Specific` section; each agent file only has **shared rules + that agent’s section** (see `_build_file_content`).
+- **Implication:** “Out of sync” in the UI does **not** mean propagation failed. Treat it as a **misleading heuristic** until the code compares **expected per-agent output** to **actual file** (or drops that check).
+- **Verify sync:** Read `~/.claude/CLAUDE.md` / `~/.cursor/rules/global.mdc` and confirm shared bullets and the right agent section; do not rely on status alone.
+
+### Only `-` bullet lines count under agent sections
+- `_extract_agent_rules` only collects lines starting with `-` under `## {Agent} Specific`. Headings like `### Foo` and non-bullet text are **ignored** and will not round-trip through sync.
+- **Fix for users:** Put agent-only guidance in **bullet** form (e.g. `- **Label:** description`).
+
+### macOS LaunchAgent must point at a **stable** Python
+- `install_daemon.py` bakes **`sys.executable`** into `~/Library/LaunchAgents/com.local.agent-rules-sync.plist`.
+- If the package was installed from a **temporary** build/venv path, that path later disappears → **EX_CONFIG (exit 78)**, daemon never runs.
+- **Fix:** `pip install -e .` (or `pip install agent-rules-sync`) using a **persistent** interpreter (e.g. miniforge `python3`), then re-run `install_daemon.py` (or reinstall) so the plist references that path. Confirm: `launchctl print gui/$(id -u)/com.local.agent-rules-sync` and that `Program` exists on disk.
+
+### Union merge and “poison” shared rules
+- Shared rules are the **union** of bullets from the **master** and **all** agent files. A stray bullet (e.g. `- new shared rule`) left in **any** file can remain in the merged set and **drown out** attention if other files were simplified.
+- **Deletion detection** (`sync_state.txt`) removes a shared bullet only when it is absent from **every** relevant file per the current logic—misunderstandings here can look like “everything reverted to one line.”
+- **Operational response:** Remove junk bullets from `RULES.md` and every agent file that still carries them, then `agent-sync sync rules` (or let the daemon pick it up).
+
+### Fast recovery when the master or agents are clobbered
+- **Backups:** `~/.config/agent-rules-sync/backups/` — look for `master_YYYYMMDD_HHMMSS.md` (and per-agent `claude_*.md`, `cursor_*.md`, etc.).
+- **Pick a snapshot:** Prefer a **large** `master_*.md` (a few KB) with the full shared list and the agent sections you care about; filenames are timestamps (newer is not always better if a bad sync just ran).
+- **Restore procedure:**
+  1. Copy the chosen backup to `~/.config/agent-rules-sync/RULES.md` (or merge edits carefully).
+  2. Run: `agent-sync sync rules` (or `python -m agent_rules_sync sync rules`) using the same environment you installed the package into.
+  3. Spot-check `~/.claude/CLAUDE.md`, `~/.cursor/rules/global.mdc`, and `daemon.log`.
+- **Editor trust:** If the UI still shows old content, confirm on disk with `head`/`wc`; some tools cache `~/.cursor/...` views.
+
+### Development install
+- From this repo: `pip install -e .` so `python -m agent_rules_sync` and the console scripts resolve `agent_sync_config` and friends; avoids `ModuleNotFoundError` when running the module from a random CWD.
+
 ## Configuration
 
 ### Agent Locations
