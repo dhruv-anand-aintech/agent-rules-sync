@@ -208,6 +208,14 @@ These notes speed up diagnosing “sync is broken” reports. Several past incid
 ### Development install
 - From this repo: `pip install -e .` so `python -m agent_rules_sync` and the console scripts resolve `agent_sync_config` and friends; avoids `ModuleNotFoundError` when running the module from a random CWD.
 
+### Legacy `.cursorrules` (Cursor)
+- [Cursor rules docs](https://cursor.com/docs/rules): `.cursor/rules/` is preferred; **`.cursorrules`** at a project root is legacy but still supported.
+- Sync **mirrors** the same body as `~/.cursor/rules/global.mdc` to **`~/.cursorrules`** and to **`<repo>/.cursorrules`** for each `repo_paths.json` entry, and **merges** bullets from those files on the next sync.
+
+### Cursor: multiple files in `~/.cursor/rules/`
+- When the primary path is `.../.cursor/rules/global.mdc`, sync **merges** all sibling `*.md` / `*.mdc` in that folder (recursive, skips `imported/`) and strips YAML **frontmatter** before parsing bullets.
+- Only **`global.mdc`** is rewritten with the merged payload (plus `.cursorrules` mirrors); other rule files stay as you edited them (globs, `alwaysApply`, etc.).
+
 ## Configuration
 
 ### Agent Locations
@@ -216,6 +224,7 @@ Configured in `agent_rules_sync.py` (lines 43-52):
 self.agents = {
     "claude": {"path": Path.home() / ".claude/CLAUDE.md", ...},
     "cursor": {"path": Path.home() / ".cursor/rules/global.mdc", ...},
+    # Legacy: ~/.cursorrules + <repo>/.cursorrules mirror global.mdc (see agent_rules_sync._cursorrules_legacy_paths)
     # ... etc
 }
 ```
