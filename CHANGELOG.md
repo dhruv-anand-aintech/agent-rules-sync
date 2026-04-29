@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.2] - 2026-04-29
+
+### Cursor: multiple rule files under `~/.cursor/rules/`
+
+- Merge `# Shared Rules` and `## Cursor Specific` bullets from every `*.md` and `*.mdc` in `~/.cursor/rules/` (recursive), skipping `imported/`.
+- Strip leading YAML frontmatter on `.md`/`.mdc` bodies before parsing (for Cursor-native rule files).
+- **Write target** remains **`global.mdc`** plus `.cursorrules` mirrors; other rule files are not overwritten so globs/frontmatter stay intact.
+- Daemon/watch hashes every merged rule file under `.cursor/rules/`.
+
+## [1.4.1] - 2026-04-29
+
+### Cursor legacy `.cursorrules`
+
+- Mirror the same rules payload as `~/.cursor/rules/global.mdc` to `~/.cursorrules` and to each repo’s `.cursorrules` when that repo is listed in `repo_paths.json`, so the [legacy project rules file](https://cursor.com/docs/rules) stays in sync.
+- Merge shared and `## Cursor Specific` bullets from those paths during sync; watch the daemon for edits to these files.
+
 ## [1.3.0a1] - 2026-02-24 (Experimental)
 
 ### ✨ Skills Sync

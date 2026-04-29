@@ -1,5 +1,6 @@
 import tempfile
 from pathlib import Path
+
 from agent_rules_sync import AgentRulesSync
 
 def test_extract_shared_rules():
@@ -185,3 +186,98 @@ def test_sync_creates_nonexistent_agent_files():
         cursor_content = cursor_file.read_text()
         assert "- rule from claude" in cursor_content
         assert "## Cursor Specific" in cursor_content
+
+
+def test_legacy_cursorrules_merge_and_mirror(tmp_path, monkeypatch):
+    """Legacy `.cursorrules` merges like Cursor; mirror matches global.mdc after sync."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_dir = tmp_path / ".config" / "agent-rules-sync"
+    config_dir.mkdir(parents=True)
+    master = config_dir / "RULES.md"
+    claude = tmp_path / ".claude" / "CLAUDE.md"
+    cursor_mdc = tmp_path / ".cursor" / "rules" / "global.mdc"
+    legacy = tmp_path / ".cursorrules"
+    claude.parent.mkdir(parents=True)
+    cursor_mdc.parent.mkdir(parents=True)
+
+    legacy.write_text(
+        "# Shared Rules\n- only in legacy cursorrules\n## Cursor Specific\n- cursor legacy bullet\n"
+    )
+    claude.write_text("# Shared Rules\n- from claude\n## Claude Code Specific\n")
+    cursor_mdc.write_text("# Shared Rules\n- from claude\n## Cursor Specific\n")
+
+    sync = AgentRulesSync()
+    sync.config_dir = config_dir
+    sync.master_file = master
+    sync.agents = {
+        "claude": {"name": "Claude Code", "path": claude, "description": ""},
+        "cursor": {"name": "Cursor", "path": cursor_mdc, "description": ""},
+    }
+
+    sync._ensure_master_exists()
+    sync.sync()
+
+    master_text = master.read_text()
+    assert "- only in legacy cursorrules" in master_text
+    assert "- from claude" in master_text
+
+    mirrored = legacy.read_text()
+    assert "- only in legacy cursorrules" in mirrored
+    assert "- from claude" in mirrored
+    assert "## Cursor Specific" in mirrored
+    assert "- cursor legacy bullet" in mirrored
+
+
+def test_cursorrules_backup_slug_home_vs_repo(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    sync = AgentRulesSync()
+    home_cr = tmp_path / ".cursorrules"
+    repo_cr = tmp_path / "myrepo" / ".cursorrules"
+    assert sync._cursorrules_backup_slug(home_cr) == "cursorrules_home"
+    assert sync._cursorrules_backup_slug(repo_cr) == "cursorrules_repo_myrepo"
+
+
+def test_strip_cursor_rule_frontmatter():
+    sync = AgentRulesSync()
+    raw = "---\nalwaysApply: true\n---\n\n# Shared Rules\n- x\n"
+    body = sync._strip_cursor_rule_frontmatter(raw)
+    assert body.strip().startswith("# Shared Rules")
+    assert "- x" in body
+    plain = "# Shared Rules\n- y\n"
+    assert sync._strip_cursor_rule_frontmatter(plain) == plain
+
+
+def test_cursor_merge_multiple_rule_files_in_rules_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_dir = tmp_path / ".config" / "agent-rules-sync"
+    config_dir.mkdir(parents=True)
+    master = config_dir / "RULES.md"
+    rules = tmp_path / ".cursor" / "rules"
+    rules.mkdir(parents=True)
+    primary = rules / "global.mdc"
+    extra = rules / "extra.md"
+    claude = tmp_path / ".claude" / "CLAUDE.md"
+    claude.parent.mkdir(parents=True)
+
+    extra.write_text("# Shared Rules\n- from extra md\n## Cursor Specific\n- extra cur\n")
+    primary.write_text("# Shared Rules\n- from claude\n- from primary\n## Cursor Specific\n")
+    claude.write_text("# Shared Rules\n- from claude\n## Claude Code Specific\n")
+
+    sync = AgentRulesSync()
+    sync.config_dir = config_dir
+    sync.master_file = master
+    sync.agents = {
+        "claude": {"name": "Claude Code", "path": claude, "description": ""},
+        "cursor": {"name": "Cursor", "path": primary, "description": ""},
+    }
+    sync._ensure_master_exists()
+    sync.sync()
+
+    assert "- from extra md" in master.read_text()
+    assert "- from primary" in master.read_text()
+    merged = primary.read_text()
+    assert "- from extra md" in merged
+    assert "- from claude" in merged
+    assert "- extra cur" in merged
+    # User-owned extra.md is not overwritten; still has original content
+    assert "from extra md" in extra.read_text()

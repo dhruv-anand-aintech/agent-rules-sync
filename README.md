@@ -53,7 +53,8 @@ Monitored locations:
 | Agent | Path |
 |-------|------|
 | Claude Code | `~/.claude/CLAUDE.md` |
-| Cursor | `~/.cursor/rules/global.mdc` |
+| Cursor | `~/.cursor/rules/global.mdc` (merged **output**); also reads every `*.md` / `*.mdc` in the **same** `~/.cursor/rules/` dir (subfolders except `imported/`). Strip YAML frontmatter before parsing. |
+| Cursor (legacy) | `~/.cursorrules` plus `<repo>/.cursorrules` for each path in `repo_paths.json` — same body as `global.mdc`; Cursor still loads these ([docs](https://cursor.com/docs/rules)) |
 | Gemini Antigravity | `~/.gemini/GEMINI.md` |
 | OpenCode | `~/.config/opencode/AGENTS.md` |
 | Codex | `~/.codex/AGENTS.md` |
@@ -103,6 +104,7 @@ Add repos to sync rules, skills, and settings into:
 
 Each repo gets:
 - `<repo>/CLAUDE.md` — synced from global rules
+- `<repo>/.cursorrules` — legacy Cursor rules file; mirrored from the same content as `global.mdc` (optional; Cursor prefers `.cursor/rules/`)
 - `<repo>/.claude/skills/` — synced from master skills
 - `<repo>/.claude/settings.json` — portable settings (auto-generated)
 - `<repo>/.claude/hooks/` — hook scripts (copied from `~/.claude/hooks/`)

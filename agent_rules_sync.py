@@ -9,7 +9,8 @@ Simple usage:
 
 Edit your rules in any location:
     ~/.claude/CLAUDE.md
-    ~/.cursor/rules/global.mdc
+    ~/.cursor/rules/*.md and *.mdc (merged; canonical write is global.mdc)
+    ~/.cursorrules (legacy; mirrored from global.mdc, still supported by Cursor in project roots)
     ~/.gemini/GEMINI.md
     ~/.config/opencode/AGENTS.md
 
@@ -81,7 +82,7 @@ class AgentRulesSync:
             "cursor": {
                 "name": "Cursor",
                 "path": Path.home() / ".cursor" / "rules" / "global.mdc",
-                "description": "Cursor global rules",
+                "description": "Cursor global rules (canonical output; all ~/.cursor/rules/*.md|.mdc merged in)",
             },
             "gemini": {
                 "name": "Gemini Antigravity",
@@ -143,6 +144,159 @@ class AgentRulesSync:
                     }
         except Exception:
             pass
+
+    def _list_repo_roots(self):
+        """Resolved repo directories from repo_paths.json (same entries as repo CLAUDE.md targets)."""
+        import json
+        repo_paths_file = self.config_dir / "repo_paths.json"
+        if not repo_paths_file.exists():
+            return []
+        try:
+            repo_paths = json.loads(repo_paths_file.read_text())
+        except Exception:
+            return []
+        roots = []
+        for repo_path in repo_paths:
+            repo = Path(repo_path).expanduser().resolve()
+            if repo.is_dir():
+                roots.append(repo)
+        return roots
+
+    def _cursorrules_legacy_paths(self):
+        """
+        Legacy `.cursorrules` paths Cursor may still load (project root; deprecated vs `.cursor/rules`).
+        We treat them like extra Cursor surfaces: same markdown shape as global.mdc
+        (# Shared Rules + ## Cursor Specific bullets).
+        """
+        paths = [Path.home() / ".cursorrules"]
+        paths.extend(repo / ".cursorrules" for repo in self._list_repo_roots())
+        return paths
+
+    def _cursorrules_backup_slug(self, cr_path: Path) -> str:
+        """Distinct backup filename prefix per legacy .cursorrules path."""
+        try:
+            home_cr = (Path.home() / ".cursorrules").resolve()
+            if cr_path.resolve() == home_cr:
+                return "cursorrules_home"
+        except Exception:
+            pass
+        return f"cursorrules_repo_{cr_path.parent.name}"
+
+    def _merge_cursorrules_legacy_into_cursor(self, master_agent_rules, all_shared_rules):
+        """Merge shared + Cursor-specific bullets from legacy `.cursorrules` files into the cursor agent."""
+        for cr_path in self._cursorrules_legacy_paths():
+            if not cr_path.exists():
+                continue
+            try:
+                text = cr_path.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+            all_shared_rules.update(self._extract_shared_rules(text))
+            if "cursor" in master_agent_rules:
+                master_agent_rules["cursor"].update(
+                    self._extract_agent_rules(text, "cursor")
+                )
+
+    def _mirror_cursorrules_legacy_files(self, content: str):
+        """
+        Write the same Cursor payload as global.mdc to legacy paths so `.cursorrules` keeps working.
+        See: https://cursor.com/docs/rules — `.cursor/rules` is preferred; `.cursorrules` remains supported.
+        """
+        for cr_path in self._cursorrules_legacy_paths():
+            try:
+                cr_path.parent.mkdir(parents=True, exist_ok=True)
+                if cr_path.exists():
+                    backup_path = self._backup_file(cr_path, self._cursorrules_backup_slug(cr_path))
+                    if backup_path:
+                        self._log_message(f"Backed up {cr_path}: {backup_path.name}")
+                with open(cr_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+            except Exception as e:
+                self._log_error(f"Error writing legacy .cursorrules {cr_path}: {e}")
+
+    def _cursorrules_watch_pairs(self):
+        """(hash_key, path) for watch loops."""
+        return [(f"cursorrules:{i}", p) for i, p in enumerate(self._cursorrules_legacy_paths())]
+
+    def _cursor_primary_path(self) -> Path:
+        """File we rewrite with the merged Cursor payload (usually ~/.cursor/rules/global.mdc)."""
+        return self.agents["cursor"]["path"]
+
+    def _cursor_all_rule_paths(self):
+        """
+        Cursor rule files: same directory as global.mdc when it lives under .../.cursor/rules/
+        (Cursor layout). Otherwise only the primary path (e.g. tests use a flat temp dir).
+        Skips .../imported/ subtrees. Always includes the primary path.
+        """
+        primary = self._cursor_primary_path()
+        rules_dir = primary.parent
+        found = set()
+        try:
+            found.add(primary.resolve())
+        except Exception:
+            found.add(primary)
+
+        looks_like_cursor_rules_dir = (
+            rules_dir.name == "rules"
+            and rules_dir.parent.name == ".cursor"
+        )
+        if looks_like_cursor_rules_dir and rules_dir.is_dir():
+            for pattern in ("*.md", "*.mdc"):
+                for p in rules_dir.rglob(pattern):
+                    if "imported" in p.parts:
+                        continue
+                    try:
+                        found.add(p.resolve())
+                    except Exception:
+                        found.add(p)
+        return sorted(found)
+
+    def _strip_cursor_rule_frontmatter(self, content: str) -> str:
+        """Strip leading YAML frontmatter from .mdc/.md rule bodies before parsing."""
+        stripped = content.lstrip("\ufeff")
+        if not stripped.startswith("---"):
+            return content
+        lines = stripped.splitlines()
+        if not lines or lines[0].strip() != "---":
+            return content
+        for i in range(1, len(lines)):
+            if lines[i].strip() == "---":
+                return "\n".join(lines[i + 1 :]).lstrip("\n")
+        return content
+
+    def _read_cursor_rule_body(self, path: Path) -> str:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+        return self._strip_cursor_rule_frontmatter(raw)
+
+    def _merge_cursor_rule_files(self, master_agent_rules, all_shared_rules):
+        """Union shared and Cursor-specific bullets from every ~/.cursor/rules/*.md|.mdc file."""
+        if "cursor" not in master_agent_rules:
+            return
+        for p in self._cursor_all_rule_paths():
+            if not p.exists():
+                continue
+            try:
+                agent_content = self._read_cursor_rule_body(p)
+            except Exception:
+                continue
+            all_shared_rules.update(self._extract_shared_rules(agent_content))
+            master_agent_rules["cursor"].update(
+                self._extract_agent_rules(agent_content, "cursor")
+            )
+
+    def _cursor_shared_rule_present(self, rule: str) -> bool:
+        """True if the canonical Cursor file still lists this bullet under # Shared Rules."""
+        p = self._cursor_primary_path()
+        if not p.exists():
+            return False
+        try:
+            agent_content = self._read_cursor_rule_body(p)
+            return rule in self._extract_shared_rules(agent_content)
+        except Exception:
+            return False
+
+    def _cursor_watch_pairs(self):
+        return [(f"cursor:{i}", p) for i, p in enumerate(self._cursor_all_rule_paths())]
 
     def _get_file_hash(self, filepath):
         """Calculate SHA256 hash of a file."""
@@ -304,6 +458,8 @@ class AgentRulesSync:
             all_shared_rules = set(master_shared)
 
             for agent_id, config in self.agents.items():
+                if agent_id == "cursor":
+                    continue
                 agent_path = config["path"]
                 if agent_path.exists():
                     try:
@@ -319,6 +475,9 @@ class AgentRulesSync:
                         master_agent_rules[agent_id].update(agent_specific)
                     except Exception:
                         pass
+
+            self._merge_cursor_rule_files(master_agent_rules, all_shared_rules)
+            self._merge_cursorrules_legacy_into_cursor(master_agent_rules, all_shared_rules)
 
             # Step 4: Detect deletions
             # If we have previous state, remove rules that were deleted from ANY file
@@ -336,6 +495,12 @@ class AgentRulesSync:
 
                     # Check if rule was deleted from any agent
                     for agent_id, config in self.agents.items():
+                        if agent_id == "cursor":
+                            if not self._cursor_shared_rule_present(rule):
+                                rules_to_delete.add(rule)
+                                self._log_message(f"Deletion detected from cursor: {rule[:50]}...")
+                                break
+                            continue
                         if config["path"].exists():
                             try:
                                 with open(config["path"], 'r') as f:
@@ -397,6 +562,8 @@ class AgentRulesSync:
                         )
                         with open(agent_path, 'w') as f:
                             f.write(content)
+                        if agent_id == "cursor":
+                            self._mirror_cursorrules_legacy_files(content)
                     except Exception as e:
                         self._log_error(f"Error syncing {agent_id}: {e}")
 
@@ -450,7 +617,13 @@ class AgentRulesSync:
         file_hashes = {}
         file_hashes["master"] = self._get_file_hash(self.master_file)
         for agent_id, config in self.agents.items():
+            if agent_id == "cursor":
+                for key, p in self._cursor_watch_pairs():
+                    file_hashes[key] = self._get_file_hash(p)
+                continue
             file_hashes[agent_id] = self._get_file_hash(config["path"])
+        for key, p in self._cursorrules_watch_pairs():
+            file_hashes[key] = self._get_file_hash(p)
 
         # Store initial hashes for skills and settings
         skill_hashes = self.skills_sync.get_watch_paths_and_hashes()
@@ -477,10 +650,23 @@ class AgentRulesSync:
                     file_hashes["master"] = master_hash
 
                 for agent_id, config in self.agents.items():
+                    if agent_id == "cursor":
+                        for key, p in self._cursor_watch_pairs():
+                            current_hash = self._get_file_hash(p)
+                            if current_hash != file_hashes.get(key):
+                                changed = True
+                                file_hashes[key] = current_hash
+                        continue
                     current_hash = self._get_file_hash(config["path"])
                     if current_hash != file_hashes[agent_id]:
                         changed = True
                         file_hashes[agent_id] = current_hash
+
+                for key, p in self._cursorrules_watch_pairs():
+                    current_hash = self._get_file_hash(p)
+                    if current_hash != file_hashes.get(key):
+                        changed = True
+                        file_hashes[key] = current_hash
 
                 # Check if any skills changed
                 if self.skills_sync.skills_changed(skill_hashes):
@@ -636,7 +822,13 @@ class AgentRulesSync:
                 file_hashes = {}
                 file_hashes["master"] = self._get_file_hash(self.master_file)
                 for agent_id, config in self.agents.items():
+                    if agent_id == "cursor":
+                        for key, p in self._cursor_watch_pairs():
+                            file_hashes[key] = self._get_file_hash(p)
+                        continue
                     file_hashes[agent_id] = self._get_file_hash(config["path"])
+                for key, p in self._cursorrules_watch_pairs():
+                    file_hashes[key] = self._get_file_hash(p)
                 skill_hashes = self.skills_sync.get_watch_paths_and_hashes()
                 settings_hashes = self.settings_sync.get_watch_hashes()
 
@@ -655,10 +847,23 @@ class AgentRulesSync:
                         file_hashes["master"] = master_hash
 
                     for agent_id, config in self.agents.items():
+                        if agent_id == "cursor":
+                            for key, p in self._cursor_watch_pairs():
+                                current_hash = self._get_file_hash(p)
+                                if current_hash != file_hashes.get(key):
+                                    changed = True
+                                    file_hashes[key] = current_hash
+                            continue
                         current_hash = self._get_file_hash(config["path"])
                         if current_hash != file_hashes[agent_id]:
                             changed = True
                             file_hashes[agent_id] = current_hash
+
+                    for key, p in self._cursorrules_watch_pairs():
+                        current_hash = self._get_file_hash(p)
+                        if current_hash != file_hashes.get(key):
+                            changed = True
+                            file_hashes[key] = current_hash
 
                     if self.skills_sync.skills_changed(skill_hashes):
                         changed = True
