@@ -181,6 +181,19 @@ class AgentSkillsSync:
         except Exception:
             return None
 
+    def _remove_existing_path(self, path):
+        """Remove a file, directory, or symlink at path."""
+        try:
+            if path.is_symlink() or path.is_file():
+                path.unlink()
+            elif path.is_dir():
+                shutil.rmtree(path)
+            return True
+        except FileNotFoundError:
+            return True
+        except Exception:
+            return False
+
     def _copy_skill(self, src, dst, log_callback=None):
         """
         Copy skill directory from src to dst.
@@ -190,8 +203,9 @@ class AgentSkillsSync:
             return True
         try:
             dst.parent.mkdir(parents=True, exist_ok=True)
-            if dst.exists():
-                shutil.rmtree(dst)
+            if dst.exists() or dst.is_symlink():
+                if not self._remove_existing_path(dst):
+                    raise OSError(f"Could not remove existing destination: {dst}")
             shutil.copytree(src, dst, symlinks=True)
             if log_callback:
                 log_callback(f"Copied {src.name} -> {dst}")
@@ -277,7 +291,8 @@ class AgentSkillsSync:
                 if backup:
                     self._backup_skill_dir(skill_path, loc_id)
                 try:
-                    shutil.rmtree(skill_path)
+                    if not self._remove_existing_path(skill_path):
+                        raise OSError(f"Could not remove {skill_path}")
                     deleted.append(skill_path)
                     log(f"Deleted {skill_name} from {loc_id} ({skill_path})")
                 except Exception as e:
