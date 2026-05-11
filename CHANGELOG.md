@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.3] - 2026-05-12
+
+### ✨ Gemini CLI Support & Automation
+
+- **Full Gemini CLI Sync**: Added `~/.gemini/skills/` to the skills sync engine.
+- **Gemini Settings Sync**: Added support for syncing `~/.gemini/settings.json` to repositories (mirroring Claude settings logic).
+- **Auto-Publishing**: Configured GitHub Actions to automatically publish to PyPI on push to `main`.
+- **Status Reporting**: Fixed `agent-sync status` to correctly validate agent rules against master sections.
+
 ## [1.4.2] - 2026-04-29
 
 ### Cursor: multiple rule files under `~/.cursor/rules/`
