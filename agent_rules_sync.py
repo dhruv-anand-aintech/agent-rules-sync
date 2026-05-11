@@ -964,7 +964,7 @@ class AgentRulesSync:
 
 
 SYNC_SCOPES = ["rules", "skills", "settings", "all"]
-COMMANDS = ["sync", "delete-skill", "setup", "status", "stop", "watch", "daemon", "guardian"]
+COMMANDS = ["sync", "delete-skill", "setup", "status", "stop", "watch", "daemon"]
 
 
 def _run_sync(syncer, scopes):
@@ -1067,18 +1067,6 @@ Sync scope examples:
 
     elif args.command == 'stop':
         syncer.daemon_stop()
-
-    elif args.command == 'guardian':
-        if sys.platform != "darwin":
-            print("❌ Guardian is only supported on macOS.")
-            sys.exit(1)
-        try:
-            from agent_guardian import AgentGuardian
-            guardian = AgentGuardian()
-            guardian.run()
-        except ImportError:
-            print("❌ agent_guardian.py not found.")
-            sys.exit(1)
 
     else:  # daemon (default)
         if syncer.pid_file.exists():

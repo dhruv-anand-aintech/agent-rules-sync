@@ -2,7 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
-## [1.4.4] - 2026-05-12
+## [1.4.6] - 2026-05-12
+
+### 🛡️ Guardian Migration
+
+- **Integrated Watchdog**: Standalone `agent-sync guardian` has been retired in favor of integration with **CronStatusApp**.
+- **Generalization**: The guardian logic is now part of a broader macOS status monitoring tool, allowing any launch agent to be "guarded" via a toggle.
+
+## [1.4.5] - 2026-05-12
 
 ### 🛡️ Agent Guardian (macOS)
 

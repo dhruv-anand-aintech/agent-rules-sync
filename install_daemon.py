@@ -13,45 +13,27 @@ import subprocess
 
 def install_macos():
     """Install as macOS launchd service"""
-    success = _install_launchd_service(
-        label="com.local.agent-rules-sync",
-        args=["-m", "agent_rules_sync", "watch"],
-        description="Agent Rules Sync Daemon"
-    )
-    
-    if success:
-        # Also install the Guardian watchdog
-        _install_launchd_service(
-            label="com.local.agent-rules-sync-guardian",
-            args=["-m", "agent_rules_sync", "guardian"],
-            description="Agent Rules Sync Guardian"
-        )
-        print(f"✓ macOS guardian watchdog installed and started")
-        
-    return success
-
-
-def _install_launchd_service(label, args, description):
-    """Helper to install a macOS launchd service"""
     plist_content = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>{label}</string>
+    <string>com.local.agent-rules-sync</string>
     <key>ProgramArguments</key>
     <array>
         <string>{python_path}</string>
-        {args_xml}
+        <string>-m</string>
+        <string>agent_rules_sync</string>
+        <string>watch</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>{log_dir}/{label}.stdout.log</string>
+    <string>{log_dir}/stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>{log_dir}/{label}.stderr.log</string>
+    <string>{log_dir}/stderr.log</string>
     <key>ProcessType</key>
     <string>Background</string>
 </dict>
@@ -59,32 +41,34 @@ def _install_launchd_service(label, args, description):
 
     python_path = sys.executable
     log_dir = str(Path.home() / ".config" / "agent-rules-sync")
+
+    # Create log directory
     Path(log_dir).mkdir(parents=True, exist_ok=True)
 
-    args_xml = "\n".join([f"        <string>{arg}</string>" for arg in args])
-    
-    plist_path = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
+    plist_path = Path.home() / "Library" / "LaunchAgents" / "com.local.agent-rules-sync.plist"
     plist_path.parent.mkdir(parents=True, exist_ok=True)
 
-    formatted_content = plist_content.format(
-        label=label,
-        python_path=python_path,
-        log_dir=log_dir,
-        args_xml=args_xml
-    )
+    plist_content = plist_content.format(python_path=python_path, log_dir=log_dir)
 
     with open(plist_path, 'w') as f:
-        f.write(formatted_content)
+        f.write(plist_content)
 
+    # Set permissions
     os.chmod(plist_path, 0o644)
 
+    # Load the service
     try:
         subprocess.run(['launchctl', 'unload', str(plist_path)], capture_output=True)
-        subprocess.run(['launchctl', 'load', str(plist_path)], check=True, capture_output=True)
-        print(f"✓ {description} installed")
+        subprocess.run(['launchctl', 'load', str(plist_path)], check=True,
+                       capture_output=True)
+        print(f"✓ macOS daemon installed and started")
+        print(f"  Service: com.local.agent-rules-sync")
+        print(f"  Plist: {plist_path}")
+        print(f"  Logs: {log_dir}/stdout.log and stderr.log")
         return True
     except subprocess.CalledProcessError as e:
-        print(f"⚠️  Could not load {label}: {e}")
+        print(f"⚠️  Could not load launchd service: {e}")
+        print(f"   Run manually: launchctl load {plist_path}")
         return False
 
 
