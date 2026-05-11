@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.4] - 2026-05-12
+
+### 🛡️ Agent Guardian (macOS)
+
+- **Watchdog Service**: New `agent-sync guardian` command that monitors the background daemon.
+- **Native Popups**: Automatically displays a macOS dialog if the daemon stops or encounters new errors.
+- **Interactive Recovery**: The popup provides options to **Restart** the daemon or **Inspect** the logs immediately.
+- **Persistent Protection**: Installed as a secondary `LaunchAgent` on macOS to ensure continuous monitoring.
+
 ## [1.4.3] - 2026-05-12
 
 ### ✨ Gemini CLI Support & Automation
