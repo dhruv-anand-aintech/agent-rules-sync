@@ -15,7 +15,7 @@ def install_macos():
     """Install as macOS launchd service"""
     success = _install_launchd_service(
         label="com.local.agent-rules-sync",
-        args=["-m", "agent_rules_sync"],
+        args=["-m", "agent_rules_sync", "watch"],
         description="Agent Rules Sync Daemon"
     )
     

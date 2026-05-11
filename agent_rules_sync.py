@@ -628,6 +628,13 @@ class AgentRulesSync:
 
     def watch(self, interval=3):
         """Watch for changes and auto-sync."""
+        # Save PID so status and guardian can track us
+        try:
+            with open(self.pid_file, 'w') as f:
+                f.write(str(os.getpid()))
+        except Exception:
+            pass
+
         # Store initial hashes for rules
         file_hashes = {}
         file_hashes["master"] = self._get_file_hash(self.master_file)
@@ -703,6 +710,13 @@ class AgentRulesSync:
         except KeyboardInterrupt:
             print("\n✓ Watch mode stopped")
             self._log_message("Watch stopped")
+        finally:
+            # Cleanup PID file
+            try:
+                if self.pid_file.exists():
+                    self.pid_file.unlink()
+            except Exception:
+                pass
 
     def status(self):
         """Show current status."""
