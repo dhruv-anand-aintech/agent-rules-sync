@@ -1,8 +1,8 @@
 # agent-sync
 
-**Synchronize rules, skills, and settings across Claude Code, Cursor, Gemini, OpenCode, and Codex — in real-time.**
+**Synchronize rules, skills, settings, and MCP servers across Claude Code, Cursor, Gemini, OpenCode, and Codex — in real-time.**
 
-Edit rules or skills in any AI agent → they automatically sync to all others. Global Claude settings propagate to configured repos for Claude Code web access.
+Edit rules, skills, or MCP servers in any AI agent → they automatically sync to all others. Global Claude settings propagate to configured repos for Claude Code web access.
 
 ## Installation
 
@@ -22,10 +22,11 @@ The daemon installs and starts automatically as a system service.
 
 ```bash
 agent-sync                         # start/ensure daemon is running
-agent-sync sync                    # one-shot sync: rules + skills + settings
+agent-sync sync                    # one-shot sync: rules + skills + settings + mcp
 agent-sync sync rules              # sync only CLAUDE.md / rules files
 agent-sync sync skills             # sync only skills directories
 agent-sync sync settings           # sync only .claude/settings.json + hooks
+agent-sync sync mcp                # sync only mcp.json / MCP server configs
 agent-sync sync rules skills       # multiple scopes
 agent-sync setup                   # TUI wizard to configure sync directions
 agent-sync status                  # daemon and sync status
@@ -88,6 +89,19 @@ Syncs a **portable version** of `~/.claude/settings.json` to configured repos' `
 
 This enables full tool permissions and hooks when using **Claude Code web** on those repos.
 
+### 4. MCP Servers (`mcp.json`)
+
+Synchronizes your **MCP server list** (under the `mcpServers` key) across all agents and the Claude Desktop. Any server added in Cursor or via `claude mcp add` becomes available everywhere.
+
+| Agent | Configuration Path |
+|-------|-------------------|
+| Claude Code | `~/.claude.json` |
+| Cursor | `~/.cursor/mcp.json` |
+| Gemini CLI | `~/.gemini/mcp.json` |
+| Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) |
+
+Project-specific MCP servers in `.mcp.json`, `.cursor/mcp.json`, or `.gemini/mcp.json` are also merged into the global master list and synced across agents.
+
 ## Configuration
 
 ### Repo Paths
@@ -124,7 +138,8 @@ Configure per-component direction via `agent-sync setup` (TUI wizard) or edit di
     "rules":    { "direction": "bidirectional", "enabled": true },
     "skills":   { "direction": "bidirectional", "enabled": true },
     "settings": { "direction": "push",          "enabled": true },
-    "hooks":    { "direction": "push",           "enabled": true }
+    "hooks":    { "direction": "push",           "enabled": true },
+    "mcp":      { "direction": "bidirectional", "enabled": true }
   }
 }
 ```
@@ -178,7 +193,7 @@ Run `agent-sync setup` for a guided TUI to configure sync directions:
 ## Commands Reference
 
 ```bash
-agent-sync sync [rules] [skills] [settings] [all]
+agent-sync sync [rules] [skills] [settings] [mcp] [all]
 ```
 
 | Scope | What it syncs |
@@ -186,6 +201,7 @@ agent-sync sync [rules] [skills] [settings] [all]
 | `rules` | Rules files (`CLAUDE.md`, `GEMINI.md`, etc.) across all agents |
 | `skills` | Skill directories across all frameworks + configured repos |
 | `settings` | `~/.claude/settings.json` → repo `.claude/settings.json` + hooks |
+| `mcp` | MCP server configurations (`mcp.json`, `~/.claude.json`) |
 | `all` | All of the above (default when no scope given) |
 
 ## How It Works
