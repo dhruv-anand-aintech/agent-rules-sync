@@ -30,7 +30,7 @@ from pathlib import Path
 
 CONFIG_VERSION = 1
 
-COMPONENTS = ["rules", "skills", "settings", "hooks"]
+COMPONENTS = ["rules", "skills", "settings", "hooks", "mcp"]
 
 # Which directions are valid per component
 VALID_DIRECTIONS = {
@@ -38,6 +38,7 @@ VALID_DIRECTIONS = {
     "skills":   ["bidirectional", "push", "pull"],
     "settings": ["push"],
     "hooks":    ["push"],
+    "mcp":      ["bidirectional", "push", "pull"],
 }
 
 # Default config — current behavior
@@ -49,6 +50,7 @@ DEFAULT_CONFIG = {
         "skills":   {"direction": "bidirectional", "enabled": True},
         "settings": {"direction": "push",          "enabled": True},
         "hooks":    {"direction": "push",           "enabled": True},
+        "mcp":      {"direction": "bidirectional", "enabled": True},
     },
 }
 

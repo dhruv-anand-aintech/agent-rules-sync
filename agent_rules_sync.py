@@ -34,6 +34,7 @@ import signal
 
 from agent_skills_sync import AgentSkillsSync
 from agent_settings_sync import AgentSettingsSync
+from agent_mcp_sync import AgentMcpSync
 from agent_sync_config import load_config, save_config, SyncConfig, DEFAULT_CONFIG, run_wizard
 
 
@@ -65,6 +66,9 @@ class AgentRulesSync:
 
         # Settings sync (syncs portable ~/.claude/settings.json to configured repos)
         self.settings_sync = AgentSettingsSync(config_dir=self.config_dir)
+
+        # MCP sync (syncs mcp.json across Cursor, Claude, Gemini, etc.)
+        self.mcp_sync = AgentMcpSync(config_dir=self.config_dir)
 
         # Sync direction config
         self.sync_config = load_config(self.config_dir)
@@ -464,6 +468,8 @@ class AgentRulesSync:
                 self.skills_sync = AgentSkillsSync(config_dir=self.config_dir)
             if self.settings_sync.config_dir.resolve() != self.config_dir.resolve():
                 self.settings_sync = AgentSettingsSync(config_dir=self.config_dir)
+            if self.mcp_sync.config_dir.resolve() != self.config_dir.resolve():
+                self.mcp_sync = AgentMcpSync(config_dir=self.config_dir)
             expect_backup = self.config_dir / "backups"
             if self.backup_dir.resolve() != expect_backup.resolve():
                 self.backup_dir = expect_backup
@@ -603,6 +609,17 @@ class AgentRulesSync:
                     self.settings_sync.sync(log_callback=self._log_message)
                 except Exception as e:
                     self._log_error(f"Settings sync error: {e}")
+
+            # Step 8: Sync MCP servers (respects direction config)
+            if self.sync_config.enabled("mcp"):
+                try:
+                    direction = self.sync_config.direction("mcp")
+                    self.mcp_sync.sync(
+                        log_callback=self._log_message,
+                        direction=direction,
+                    )
+                except Exception as e:
+                    self._log_error(f"MCP sync error: {e}")
         except Exception as e:
             self._log_error(f"Sync error: {e}")
 
@@ -650,6 +667,7 @@ class AgentRulesSync:
         # Store initial hashes for skills and settings
         skill_hashes = self.skills_sync.get_watch_paths_and_hashes()
         settings_hashes = self.settings_sync.get_watch_hashes()
+        mcp_hashes = self.mcp_sync.get_watch_hashes()
 
         print(f"🔄 Watching for changes (every {interval}s)...")
         print(f"Edit rules or skills in any agent - changes auto-sync!\n")
@@ -699,6 +717,11 @@ class AgentRulesSync:
                 if self.settings_sync.settings_changed(settings_hashes):
                     changed = True
                     settings_hashes = self.settings_sync.get_watch_hashes()
+
+                # Check if MCP servers changed
+                if self.mcp_sync.mcp_changed(mcp_hashes):
+                    changed = True
+                    mcp_hashes = self.mcp_sync.get_watch_hashes()
 
                 if changed:
                     self.sync()
@@ -790,6 +813,16 @@ class AgentRulesSync:
         print(f"   Backups: {self.skills_sync.backup_dir}")
         print()
 
+        # MCP status
+        import json
+        mcp_count = len(
+            json.loads(self.mcp_sync.master_file.read_text()).get("mcpServers", {})
+            if self.mcp_sync.master_file.exists() else {}
+        )
+        print(f"🔌 MCP: {mcp_count} servers synced")
+        print(f"   Master: {self.mcp_sync.master_file}")
+        print()
+
         print(f"{'='*70}\n")
 
     def daemon_start(self):
@@ -877,6 +910,7 @@ class AgentRulesSync:
                     file_hashes[key] = self._get_file_hash(p)
                 skill_hashes = self.skills_sync.get_watch_paths_and_hashes()
                 settings_hashes = self.settings_sync.get_watch_hashes()
+                mcp_hashes = self.mcp_sync.get_watch_hashes()
 
                 # Initial sync
                 self.sync()
@@ -918,6 +952,10 @@ class AgentRulesSync:
                     if self.settings_sync.settings_changed(settings_hashes):
                         changed = True
                         settings_hashes = self.settings_sync.get_watch_hashes()
+
+                    if self.mcp_sync.mcp_changed(mcp_hashes):
+                        changed = True
+                        mcp_hashes = self.mcp_sync.get_watch_hashes()
 
                     if changed:
                         self.sync()
@@ -963,7 +1001,7 @@ class AgentRulesSync:
                 pass
 
 
-SYNC_SCOPES = ["rules", "skills", "settings", "all"]
+SYNC_SCOPES = ["rules", "skills", "settings", "mcp", "all"]
 COMMANDS = ["sync", "delete-skill", "setup", "status", "stop", "watch", "daemon"]
 
 
@@ -989,6 +1027,14 @@ def _run_sync(syncer, scopes):
             syncer.settings_sync.sync(log_callback=log)
         except Exception as e:
             print(f"  ✗ Settings error: {e}")
+
+    if "mcp" in scopes or "all" in scopes:
+        print("⟳ Syncing MCP servers...")
+        try:
+            direction = syncer.sync_config.direction("mcp")
+            syncer.mcp_sync.sync(log_callback=log, direction=direction)
+        except Exception as e:
+            print(f"  ✗ MCP error: {e}")
 
     print("✓ Done")
 
