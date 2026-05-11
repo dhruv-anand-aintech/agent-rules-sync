@@ -57,9 +57,6 @@ class AgentRulesSync:
         self.pid_file = self.config_dir / "daemon.pid"
         self.watch_flag_file = self.config_dir / "watching"
 
-        # State file to track previous sync (for detecting deletions)
-        self.state_file = self.config_dir / "sync_state.txt"
-
         # Stop event for graceful Windows daemon shutdown
         self.stop_event = threading.Event()
 
@@ -85,9 +82,9 @@ class AgentRulesSync:
                 "description": "Cursor global rules (canonical output; all ~/.cursor/rules/*.md|.mdc merged in)",
             },
             "gemini": {
-                "name": "Gemini Antigravity",
+                "name": "Gemini",
                 "path": Path.home() / ".gemini" / "GEMINI.md",
-                "description": "Gemini Antigravity global rules",
+                "description": "Gemini CLI / Antigravity global rules",
             },
             "opencode": {
                 "name": "OpenCode",
@@ -124,6 +121,11 @@ class AgentRulesSync:
         # Load repo paths and add each repo's CLAUDE.md as a sync target.
         # Uses the same repo_paths.json as agent_skills_sync.
         self._load_repo_agent_paths()
+
+    @property
+    def state_file(self):
+        """Previous sync’s shared bullets; always under the active config_dir."""
+        return self.config_dir / "sync_state.txt"
 
     def _load_repo_agent_paths(self):
         """Add configured repos' CLAUDE.md as rules sync targets."""
@@ -184,6 +186,8 @@ class AgentRulesSync:
 
     def _merge_cursorrules_legacy_into_cursor(self, master_agent_rules, all_shared_rules):
         """Merge shared + Cursor-specific bullets from legacy `.cursorrules` files into the cursor agent."""
+        if not self._cursor_layout_is_canonical():
+            return
         for cr_path in self._cursorrules_legacy_paths():
             if not cr_path.exists():
                 continue
@@ -202,6 +206,8 @@ class AgentRulesSync:
         Write the same Cursor payload as global.mdc to legacy paths so `.cursorrules` keeps working.
         See: https://cursor.com/docs/rules — `.cursor/rules` is preferred; `.cursorrules` remains supported.
         """
+        if not self._cursor_layout_is_canonical():
+            return
         for cr_path in self._cursorrules_legacy_paths():
             try:
                 cr_path.parent.mkdir(parents=True, exist_ok=True)
@@ -216,11 +222,22 @@ class AgentRulesSync:
 
     def _cursorrules_watch_pairs(self):
         """(hash_key, path) for watch loops."""
+        if not self._cursor_layout_is_canonical():
+            return []
         return [(f"cursorrules:{i}", p) for i, p in enumerate(self._cursorrules_legacy_paths())]
 
     def _cursor_primary_path(self) -> Path:
         """File we rewrite with the merged Cursor payload (usually ~/.cursor/rules/global.mdc)."""
         return self.agents["cursor"]["path"]
+
+    def _cursor_layout_is_canonical(self) -> bool:
+        """True when the Cursor target lives under ~/.cursor/rules/ (daemon/tests use real layout)."""
+        primary = self._cursor_primary_path()
+        try:
+            rules_dir = primary.parent
+        except Exception:
+            return False
+        return rules_dir.name == "rules" and rules_dir.parent.name == ".cursor"
 
     def _cursor_all_rule_paths(self):
         """
@@ -439,6 +456,19 @@ class AgentRulesSync:
         - Subtract any rules that were in previous state but removed from ANY file
         """
         try:
+            # Tests (and future callers) may point config_dir at an isolated directory after
+            # __init__; reload config + sub-syncers so we never use another dir's sync_state,
+            # sync_config.json, or skills paths.
+            self.sync_config = load_config(self.config_dir)
+            if self.skills_sync.config_dir.resolve() != self.config_dir.resolve():
+                self.skills_sync = AgentSkillsSync(config_dir=self.config_dir)
+            if self.settings_sync.config_dir.resolve() != self.config_dir.resolve():
+                self.settings_sync = AgentSettingsSync(config_dir=self.config_dir)
+            expect_backup = self.config_dir / "backups"
+            if self.backup_dir.resolve() != expect_backup.resolve():
+                self.backup_dir = expect_backup
+                self.backup_dir.mkdir(parents=True, exist_ok=True)
+
             self._ensure_master_exists()
             self._migrate_from_old_version()
 
@@ -487,31 +517,16 @@ class AgentRulesSync:
                 self._log_message(f"Checking deletions: {len(previous_shared)} in prev, {len(master_shared)} in master, {len(all_shared_rules)} in union")
 
                 for rule in previous_shared:
-                    # Check if rule was deleted from master
+                    # Master intentionally trimmed (hidden RULES.md) always wins.
                     if rule not in master_shared:
                         rules_to_delete.add(rule)
                         self._log_message(f"Deletion detected from master: {rule[:50]}...")
                         continue
-
-                    # Check if rule was deleted from any agent
-                    for agent_id, config in self.agents.items():
-                        if agent_id == "cursor":
-                            if not self._cursor_shared_rule_present(rule):
-                                rules_to_delete.add(rule)
-                                self._log_message(f"Deletion detected from cursor: {rule[:50]}...")
-                                break
-                            continue
-                        if config["path"].exists():
-                            try:
-                                with open(config["path"], 'r') as f:
-                                    agent_content = f.read()
-                                agent_shared = self._extract_shared_rules(agent_content)
-                                if rule not in agent_shared:
-                                    rules_to_delete.add(rule)
-                                    self._log_message(f"Deletion detected from {agent_id}: {rule[:50]}...")
-                                    break
-                            except Exception:
-                                pass
+                    # Gone from everywhere we merged — do not require each agent to list every
+                    # bullet mid-sync (Cursor may not have received Claude's row yet).
+                    if rule not in all_shared_rules:
+                        rules_to_delete.add(rule)
+                        self._log_message(f"Deletion detected (absent after merge): {rule[:50]}...")
 
                 # Remove deleted rules
                 if rules_to_delete:
@@ -717,6 +732,11 @@ class AgentRulesSync:
         print(f"   Hash: {master_hash[:12] if master_hash else 'N/A'}...")
         print()
 
+        # Read master file once
+        with open(self.master_file, 'r') as f:
+            master_content = f.read()
+        master_shared = self._extract_shared_rules(master_content)
+        
         # Agent status
         for agent_id, config in self.agents.items():
             agent_path = config["path"]
@@ -726,10 +746,22 @@ class AgentRulesSync:
             print(f"   Path: {agent_path}")
 
             if agent_path.exists():
-                agent_hash = self._get_file_hash(agent_path)
-                in_sync = agent_hash == master_hash
-                status = "✓ In sync" if in_sync else "⚠️  Out of sync"
-                print(f"   Status: {status}")
+                try:
+                    with open(agent_path, 'r') as f:
+                        agent_content = f.read()
+                    
+                    agent_shared = self._extract_shared_rules(agent_content)
+                    agent_specific = self._extract_agent_rules(agent_content, agent_id)
+                    
+                    master_specific = self._extract_agent_rules(master_content, agent_id)
+                    
+                    in_sync = (agent_shared == master_shared and 
+                              agent_specific == master_specific)
+                    
+                    status = "✓ In sync" if in_sync else "⚠️  Out of sync"
+                    print(f"   Status: {status}")
+                except Exception as e:
+                    print(f"   Status: ⚠️  Error reading: {e}")
             else:
                 print(f"   Status: ⚠️  Not found")
 

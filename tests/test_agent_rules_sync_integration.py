@@ -13,8 +13,11 @@ def test_full_workflow_shared_rules():
         sync = AgentRulesSync()
         sync.config_dir = config_dir
         sync.master_file = master_file
-        sync.agents["claude"]["path"] = claude_file
-        sync.agents["cursor"]["path"] = cursor_file
+        # Replace agents entirely — __init__ already merged real repo_paths.json from ~/.config
+        sync.agents = {
+            "claude": {"path": claude_file, "name": "Claude Code", "description": ""},
+            "cursor": {"path": cursor_file, "name": "Cursor", "description": ""},
+        }
 
         # Initialize
         sync._ensure_master_exists()
@@ -107,7 +110,6 @@ def test_delete_rule_from_master_only():
         sync = AgentRulesSync()
         sync.config_dir = config_dir
         sync.master_file = master_file
-        sync.state_file = config_dir / "sync_state.txt"
         sync.agents = {
             "claude": {"path": claude_file, "name": "Claude Code", "description": ""},
             "cursor": {"path": cursor_file, "name": "Cursor", "description": ""}
@@ -138,6 +140,58 @@ def test_delete_rule_from_master_only():
         assert "- rule to keep" in master_content, "Other rule should remain"
         assert "- rule to keep" in claude_content, "Other rule should remain"
         assert "- rule to keep" in cursor_content, "Other rule should remain"
+
+
+def test_repo_claude_omitting_shared_rules_does_not_delete_globally():
+    """Project CLAUDE.md often omits the full global shared list; that must not wipe ~/.claude."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config_dir = Path(tmpdir)
+        master_file = config_dir / "RULES.md"
+        claude_file = config_dir / "claude.md"
+        cursor_file = config_dir / "cursor.md"
+        repo_claude = config_dir / "repo_CLAUDE.md"
+
+        sync = AgentRulesSync()
+        sync.config_dir = config_dir
+        sync.master_file = master_file
+        sync.backup_dir = config_dir / "backups"
+        sync.backup_dir.mkdir(exist_ok=True)
+        sync.agents = {
+            "claude": {"path": claude_file, "name": "Claude Code", "description": ""},
+            "cursor": {"path": cursor_file, "name": "Cursor", "description": ""},
+            "repo:testproj": {
+                "path": repo_claude,
+                "name": "Repo: testproj",
+                "description": "",
+            },
+        }
+
+        shared_full = "# Shared Rules\n- rule from global set\n"
+        master_file.write_text(
+            shared_full
+            + "## Claude Code Specific\n\n## Cursor Specific\n\n## Repo: testproj Specific\n"
+        )
+        claude_file.write_text(shared_full + "## Claude Code Specific\n")
+        cursor_file.write_text(shared_full + "## Cursor Specific\n")
+        repo_claude.write_text(shared_full + "## Repo: testproj Specific\n")
+
+        sync.sync()
+
+        repo_claude.write_text(
+            "# Shared Rules\n- unrelated local stub\n## Repo: testproj Specific\n"
+        )
+
+        sync.sync()
+
+        for label, path in (
+            ("claude", claude_file),
+            ("cursor", cursor_file),
+            ("master", master_file),
+        ):
+            assert "- rule from global set" in path.read_text(), (
+                f"global shared rule should survive repo stub ({label})"
+            )
+
 
 def test_full_workflow_creates_missing_agents():
     """Test: Sync creates missing agent files with synced content."""

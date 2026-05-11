@@ -1,25 +1,20 @@
 #!/usr/bin/env python3
 """
-Agent Settings Sync - Sync portable Claude settings + hooks to configured repos.
+Agent Settings Sync - Sync portable agent settings + hooks to configured repos.
 
-Reads ~/.claude/settings.json (global), builds a portable version for each
-repo's .claude/settings.json:
-  - Strips machine-specific keys (statusLine, spinnerVerbs, etc.)
+Supports:
+- Claude Code: ~/.claude/settings.json -> repo/.claude/settings.json
+- Gemini CLI:  ~/.gemini/settings.json -> repo/.gemini/settings.json
+
+Reads global settings, builds a portable version for each repo:
+  - Strips machine-specific keys (statusLine, effortLevel, etc.)
   - Strips permission rules containing absolute machine paths
   - Rewrites hook commands to use repo-relative paths where possible
   - Keeps plugins, MCP tools, permissions that are portable
 
 Configured via:
   ~/.config/agent-rules-sync/repo_paths.json   — list of repo paths to sync to
-  ~/.config/agent-rules-sync/settings_sync.json — optional overrides (see below)
-
-settings_sync.json schema:
-  {
-    "strip_keys": ["statusLine", "hooks", ...],        // top-level keys to strip entirely
-    "strip_path_prefixes": ["/Users/", "/opt/..."],    // prefixes marking machine-specific rules
-    "sync_hooks": true,                                 // whether to include hooks (default true)
-    "hook_script_dir": ".claude/hooks"                 // repo-relative dir for hook scripts
-  }
+  ~/.config/agent-rules-sync/settings_sync.json — optional overrides
 """
 
 import json
@@ -41,6 +36,9 @@ DEFAULT_STRIP_KEYS = [
     "skipAutoPermissionPrompt",
     "remote",
     "additionalDirectories",
+    "theme",
+    "selectedAuthType",
+    "security",
 ]
 
 # Absolute path prefixes that make a permission rule machine-specific
@@ -52,19 +50,28 @@ DEFAULT_STRIP_PATH_PREFIXES = [
     "/Applications/",
 ]
 
-# Hook script dir inside global ~/.claude/hooks/
-GLOBAL_HOOKS_DIR = Path.home() / ".claude" / "hooks"
-
-# Default repo-relative location for hook scripts
-DEFAULT_HOOK_SCRIPT_DIR = ".claude/hooks"
+# Default sources for settings sync
+DEFAULT_SOURCES = {
+    "claude": {
+        "global_path": Path.home() / ".claude" / "settings.json",
+        "repo_rel_path": ".claude/settings.json",
+        "hooks_dir": Path.home() / ".claude" / "hooks",
+        "repo_hooks_rel": ".claude/hooks"
+    },
+    "gemini": {
+        "global_path": Path.home() / ".gemini" / "settings.json",
+        "repo_rel_path": ".gemini/settings.json",
+        "hooks_dir": Path.home() / ".gemini" / "hooks",
+        "repo_hooks_rel": ".gemini/hooks"
+    }
+}
 
 
 class AgentSettingsSync:
-    """Syncs a portable Claude settings.json (with hooks) to configured repos."""
+    """Syncs portable agent settings (with hooks) to configured repos."""
 
     def __init__(self, config_dir=None):
         self.config_dir = config_dir or (Path.home() / ".config" / "agent-rules-sync")
-        self.source = Path.home() / ".claude" / "settings.json"
         self._load_config()
         self._load_repo_paths()
 
@@ -81,7 +88,6 @@ class AgentSettingsSync:
         self.strip_keys = set(cfg.get("strip_keys", DEFAULT_STRIP_KEYS))
         self.strip_path_prefixes = cfg.get("strip_path_prefixes", DEFAULT_STRIP_PATH_PREFIXES)
         self.sync_hooks = cfg.get("sync_hooks", True)
-        self.hook_script_dir = cfg.get("hook_script_dir", DEFAULT_HOOK_SCRIPT_DIR)
 
     def _load_repo_paths(self):
         self.repo_paths = []
@@ -103,40 +109,50 @@ class AgentSettingsSync:
                 return True
         return False
 
-    def _rewrite_hook_command(self, command: str, repo: Path) -> str | None:
+    def _rewrite_hook_command(self, command: str, repo: Path, source_info: dict) -> str | None:
         """
         Rewrite a hook command so it works from a repo checkout.
-
-        Rules:
-        - If command references a script in ~/.claude/hooks/ (absolute or tilde),
-          rewrite to repo-relative .claude/hooks/<script> (script will be copied).
-        - If command references any other machine-specific absolute path, return None.
-        - Otherwise return command unchanged.
         """
+        hooks_dir = source_info["hooks_dir"]
+        repo_hooks_rel = source_info["repo_hooks_rel"]
+
         # Match both absolute path and tilde form
         hooks_variants = [
-            str(GLOBAL_HOOKS_DIR) + "/",   # /Users/foo/.claude/hooks/
-            "~/.claude/hooks/",             # tilde form
+            str(hooks_dir) + "/",
+            "~" + str(hooks_dir).replace(str(Path.home()), "") + "/",
         ]
+        
+        # Add special case for common patterns if they aren't covered
+        if "claude" in str(hooks_dir):
+            hooks_variants.append("~/.claude/hooks/")
+        if "gemini" in str(hooks_dir):
+            hooks_variants.append("~/.gemini/hooks/")
+
         for variant in hooks_variants:
             if variant in command:
-                return command.replace(variant, self.hook_script_dir + "/")
+                return command.replace(variant, repo_hooks_rel + "/")
+
         # Check for other machine-specific absolute paths
         for prefix in self.strip_path_prefixes:
             if prefix in command:
                 return None
-        # Also strip tilde-prefixed ~/.claude/ references (not hooks) as they
-        # are machine-home-specific — except ~/.claude/hooks/ handled above
-        if "~/.claude/" in command:
+        
+        # Strip tilde-prefixed home references
+        if "~/" in command and not any(v in command for v in hooks_variants):
             return None
+            
         return command
 
-    def _copy_hook_scripts(self, repo: Path, hook_scripts: list[str], log):
-        """Copy referenced hook scripts from ~/.claude/hooks/ into repo's hook dir."""
-        dest_dir = repo / self.hook_script_dir
+    def _copy_hook_scripts(self, repo: Path, hook_scripts: list[str], source_info: dict, log):
+        """Copy referenced hook scripts into repo's hook dir."""
+        hooks_dir = source_info["hooks_dir"]
+        repo_hooks_rel = source_info["repo_hooks_rel"]
+        
+        dest_dir = repo / repo_hooks_rel
         dest_dir.mkdir(parents=True, exist_ok=True)
+        
         for script_name in hook_scripts:
-            src = GLOBAL_HOOKS_DIR / script_name
+            src = hooks_dir / script_name
             dst = dest_dir / script_name
             if src.exists():
                 if not dst.exists() or src.read_bytes() != dst.read_bytes():
@@ -144,16 +160,16 @@ class AgentSettingsSync:
                     dst.chmod(0o755)
                     log(f"[settings] {repo.name}: copied hook script {script_name}")
 
-    def _make_portable_hooks(self, hooks: dict, repo: Path, log) -> dict | None:
+    def _make_portable_hooks(self, hooks: dict, repo: Path, source_info: dict, log) -> dict | None:
         """
         Rewrite hooks block for the repo.
-        Returns portable hooks dict and populates self._hook_scripts_to_copy.
         """
         if not self.sync_hooks or not hooks:
             return None
 
         self._hook_scripts_to_copy = []
         portable = {}
+        hooks_dir = source_info["hooks_dir"]
 
         for event, matchers in hooks.items():
             portable_matchers = []
@@ -161,21 +177,24 @@ class AgentSettingsSync:
                 portable_hooks_list = []
                 for hook in matcher_block.get("hooks", []):
                     if hook.get("type") != "command":
-                        # prompt/agent hooks — keep as-is if no machine paths
                         portable_hooks_list.append(hook)
                         continue
                     cmd = hook.get("command", "")
-                    new_cmd = self._rewrite_hook_command(cmd, repo)
+                    new_cmd = self._rewrite_hook_command(cmd, repo, source_info)
                     if new_cmd is None:
                         log(f"[settings] {repo.name}: skipping non-portable hook in {event}: {cmd[:60]}")
                         continue
+                        
                     # Track any hook scripts to copy
-                    for variant in [str(GLOBAL_HOOKS_DIR) + "/", "~/.claude/hooks/"]:
+                    for variant in [str(hooks_dir) + "/", "~" + str(hooks_dir).replace(str(Path.home()), "") + "/"]:
                         if variant in cmd:
-                            script_name = cmd.split(variant)[1].split()[0]
-                            if script_name not in self._hook_scripts_to_copy:
-                                self._hook_scripts_to_copy.append(script_name)
+                            parts = cmd.split(variant)
+                            if len(parts) > 1:
+                                script_name = parts[1].split()[0].replace('"', '').replace("'", "")
+                                if script_name not in self._hook_scripts_to_copy:
+                                    self._hook_scripts_to_copy.append(script_name)
                             break
+                            
                     rewritten = dict(hook)
                     rewritten["command"] = new_cmd
                     portable_hooks_list.append(rewritten)
@@ -190,7 +209,7 @@ class AgentSettingsSync:
 
         return portable if portable else None
 
-    def _make_portable(self, settings: dict, repo: Path, log) -> dict:
+    def _make_portable(self, settings: dict, repo: Path, source_info: dict, log) -> dict:
         """Build a portable settings dict for the given repo."""
         result = {}
         for key, value in settings.items():
@@ -205,7 +224,6 @@ class AgentSettingsSync:
                             if not self._is_machine_specific_rule(r)
                         ]
                     elif perm_key == "additionalDirectories":
-                        # Strip machine-specific dirs (keep /tmp etc.)
                         portable_perms["additionalDirectories"] = [
                             d for d in perm_val
                             if not any(d.startswith(p) for p in self.strip_path_prefixes)
@@ -214,7 +232,7 @@ class AgentSettingsSync:
                         portable_perms[perm_key] = perm_val
                 result["permissions"] = portable_perms
             elif key == "hooks":
-                portable_hooks = self._make_portable_hooks(value, repo, log)
+                portable_hooks = self._make_portable_hooks(value, repo, source_info, log)
                 if portable_hooks:
                     result["hooks"] = portable_hooks
             else:
@@ -227,51 +245,54 @@ class AgentSettingsSync:
         return hashlib.sha256(path.read_bytes()).hexdigest()
 
     def sync(self, log_callback=None):
-        """Sync portable settings to all configured repos. Returns list of (repo, status)."""
+        """Sync portable settings to all configured repos."""
         log = log_callback or (lambda _: None)
-
-        if not self.source.exists():
-            log("Source ~/.claude/settings.json not found, skipping settings sync")
-            return []
-
-        try:
-            raw = json.loads(self.source.read_text())
-        except Exception as e:
-            log(f"Failed to parse ~/.claude/settings.json: {e}")
-            return []
-
         results = []
-        for repo in self.repo_paths:
-            self._hook_scripts_to_copy = []
-            portable = self._make_portable(raw, repo, log)
-            portable_json = json.dumps(portable, indent=2) + "\n"
 
-            dest = repo / ".claude" / "settings.json"
-            dest.parent.mkdir(parents=True, exist_ok=True)
+        for name, info in DEFAULT_SOURCES.items():
+            source = info["global_path"]
+            if not source.exists():
+                continue
 
-            if dest.exists() and dest.read_text() == portable_json:
-                log(f"[settings] {repo.name}: up to date")
-                results.append((repo, "up_to_date"))
-            else:
-                dest.write_text(portable_json)
-                log(f"[settings] {repo.name}: synced")
-                results.append((repo, "synced"))
+            try:
+                raw = json.loads(source.read_text())
+            except Exception as e:
+                log(f"Failed to parse {source}: {e}")
+                continue
 
-            # Copy hook scripts referenced in the hooks block
-            if self._hook_scripts_to_copy:
-                self._copy_hook_scripts(repo, self._hook_scripts_to_copy, log)
+            for repo in self.repo_paths:
+                self._hook_scripts_to_copy = []
+                portable = self._make_portable(raw, repo, info, log)
+                portable_json = json.dumps(portable, indent=2) + "\n"
+
+                dest = repo / info["repo_rel_path"]
+                dest.parent.mkdir(parents=True, exist_ok=True)
+
+                if dest.exists() and dest.read_text() == portable_json:
+                    log(f"[settings] {repo.name} ({name}): up to date")
+                    results.append((repo, f"{name}:up_to_date"))
+                else:
+                    dest.write_text(portable_json)
+                    log(f"[settings] {repo.name} ({name}): synced")
+                    results.append((repo, f"{name}:synced"))
+
+                if self._hook_scripts_to_copy:
+                    self._copy_hook_scripts(repo, self._hook_scripts_to_copy, info, log)
 
         return results
 
     def get_watch_hashes(self) -> dict:
-        """Return {path: hash} for change detection — watch source + hook scripts."""
+        """Return {path: hash} for change detection."""
         result = {}
-        if self.source.exists():
-            result[self.source] = self._file_hash(self.source)
-        if GLOBAL_HOOKS_DIR.exists():
-            for f in GLOBAL_HOOKS_DIR.iterdir():
-                if f.is_file():
-                    result[f] = self._file_hash(f)
+        for info in DEFAULT_SOURCES.values():
+            source = info["global_path"]
+            if source.exists():
+                result[source] = self._file_hash(source)
+            hooks_dir = info["hooks_dir"]
+            if hooks_dir.exists():
+                for f in hooks_dir.iterdir():
+                    if f.is_file():
+                        result[f] = self._file_hash(f)
         return result
 
     def settings_changed(self, old_hashes: dict) -> bool:

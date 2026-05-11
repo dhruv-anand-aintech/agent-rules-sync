@@ -14,7 +14,6 @@ def test_migration_creates_state_file():
     with tempfile.TemporaryDirectory() as tmpdir:
         config_dir = Path(tmpdir)
         master_file = config_dir / "RULES.md"
-        state_file = config_dir / "sync_state.txt"
         claude_file = config_dir / "claude.md"
 
         # Simulate old installation: master file exists but no state file
@@ -23,22 +22,21 @@ def test_migration_creates_state_file():
         sync = AgentRulesSync()
         sync.config_dir = config_dir
         sync.master_file = master_file
-        sync.state_file = state_file
         sync.agents = {
             "claude": {"path": claude_file, "name": "Claude Code", "description": ""}
         }
 
         # Verify state file doesn't exist yet
-        assert not state_file.exists(), "State file should not exist yet"
+        assert not sync.state_file.exists(), "State file should not exist yet"
 
         # Run sync (should trigger migration)
         sync.sync()
 
         # Verify state file was created
-        assert state_file.exists(), "Migration should create state file"
+        assert sync.state_file.exists(), "Migration should create state file"
 
         # Verify state file contains the rule
-        state_content = state_file.read_text()
+        state_content = sync.state_file.read_text()
         assert "- existing rule" in state_content, "State file should contain existing rule"
 
 
@@ -47,7 +45,6 @@ def test_migration_preserves_existing_rules():
     with tempfile.TemporaryDirectory() as tmpdir:
         config_dir = Path(tmpdir)
         master_file = config_dir / "RULES.md"
-        state_file = config_dir / "sync_state.txt"
         claude_file = config_dir / "claude.md"
         cursor_file = config_dir / "cursor.md"
 
@@ -59,7 +56,6 @@ def test_migration_preserves_existing_rules():
         sync = AgentRulesSync()
         sync.config_dir = config_dir
         sync.master_file = master_file
-        sync.state_file = state_file
         sync.agents = {
             "claude": {"path": claude_file, "name": "Claude Code", "description": ""},
             "cursor": {"path": cursor_file, "name": "Cursor", "description": ""}
@@ -86,7 +82,6 @@ def test_migration_only_runs_once():
     with tempfile.TemporaryDirectory() as tmpdir:
         config_dir = Path(tmpdir)
         master_file = config_dir / "RULES.md"
-        state_file = config_dir / "sync_state.txt"
         claude_file = config_dir / "claude.md"
 
         master_file.write_text("# Shared Rules\n- test rule\n## Claude Code Specific\n")
@@ -94,24 +89,23 @@ def test_migration_only_runs_once():
         sync = AgentRulesSync()
         sync.config_dir = config_dir
         sync.master_file = master_file
-        sync.state_file = state_file
         sync.agents = {
             "claude": {"path": claude_file, "name": "Claude Code", "description": ""}
         }
 
         # First sync - should create state file
         sync.sync()
-        first_state_content = state_file.read_text()
-        first_mtime = state_file.stat().st_mtime
+        first_state_content = sync.state_file.read_text()
+        first_mtime = sync.state_file.stat().st_mtime
 
         # Second sync - should not recreate state file
         import time
         time.sleep(0.1)  # Ensure different timestamp if recreated
         sync.sync()
-        second_mtime = state_file.stat().st_mtime
+        second_mtime = sync.state_file.stat().st_mtime
 
         # State file should be updated by sync, but not recreated by migration
-        assert state_file.exists()
+        assert sync.state_file.exists()
         # mtime will change due to normal state saving, so we just verify it wasn't deleted
 
 
@@ -120,7 +114,6 @@ def test_upgrade_scenario_deletion_works_after_migration():
     with tempfile.TemporaryDirectory() as tmpdir:
         config_dir = Path(tmpdir)
         master_file = config_dir / "RULES.md"
-        state_file = config_dir / "sync_state.txt"
         claude_file = config_dir / "claude.md"
         cursor_file = config_dir / "cursor.md"
 
@@ -132,7 +125,6 @@ def test_upgrade_scenario_deletion_works_after_migration():
         sync = AgentRulesSync()
         sync.config_dir = config_dir
         sync.master_file = master_file
-        sync.state_file = state_file
         sync.agents = {
             "claude": {"path": claude_file, "name": "Claude Code", "description": ""},
             "cursor": {"path": cursor_file, "name": "Cursor", "description": ""}
@@ -140,7 +132,7 @@ def test_upgrade_scenario_deletion_works_after_migration():
 
         # Step 2: First sync after upgrade (triggers migration)
         sync.sync()
-        assert state_file.exists(), "Migration should create state file"
+        assert sync.state_file.exists(), "Migration should create state file"
 
         # Step 3: User deletes a rule from master (tests deletion works after migration)
         master_file.write_text("# Shared Rules\n- old rule\n## Claude Code Specific\n## Cursor Specific\n")

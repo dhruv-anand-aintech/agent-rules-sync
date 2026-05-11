@@ -86,10 +86,10 @@ def test_sync_merges_shared_rules():
         sync = AgentRulesSync()
         sync.config_dir = config_dir
         sync.master_file = master_file
-
-        # Setup agent files
-        sync.agents["claude"]["path"] = claude_file
-        sync.agents["cursor"]["path"] = cursor_file
+        sync.agents = {
+            "claude": {"path": claude_file, "name": "Claude Code", "description": ""},
+            "cursor": {"path": cursor_file, "name": "Cursor", "description": ""},
+        }
 
         claude_file.write_text("# Shared Rules\n- rule from claude\n## Claude Code Specific\n")
         cursor_file.write_text("# Shared Rules\n- rule from cursor\n## Cursor Specific\n")
@@ -112,9 +112,10 @@ def test_sync_keeps_agent_specific_rules():
         sync = AgentRulesSync()
         sync.config_dir = config_dir
         sync.master_file = master_file
-
-        sync.agents["claude"]["path"] = claude_file
-        sync.agents["cursor"]["path"] = cursor_file
+        sync.agents = {
+            "claude": {"path": claude_file, "name": "Claude Code", "description": ""},
+            "cursor": {"path": cursor_file, "name": "Cursor", "description": ""},
+        }
 
         claude_file.write_text("# Shared Rules\n## Claude Code Specific\n- claude only\n")
         cursor_file.write_text("# Shared Rules\n## Cursor Specific\n- cursor only\n")
@@ -140,9 +141,10 @@ def test_sync_does_not_cross_pollinate_agent_rules():
         sync = AgentRulesSync()
         sync.config_dir = config_dir
         sync.master_file = master_file
-
-        sync.agents["claude"]["path"] = claude_file
-        sync.agents["cursor"]["path"] = cursor_file
+        sync.agents = {
+            "claude": {"path": claude_file, "name": "Claude Code", "description": ""},
+            "cursor": {"path": cursor_file, "name": "Cursor", "description": ""},
+        }
 
         claude_file.write_text("# Shared Rules\n## Claude Code Specific\n- claude only\n")
         cursor_file.write_text("# Shared Rules\n## Cursor Specific\n- cursor only\n")
@@ -166,9 +168,10 @@ def test_sync_creates_nonexistent_agent_files():
         sync = AgentRulesSync()
         sync.config_dir = config_dir
         sync.master_file = master_file
-        
-        sync.agents["claude"]["path"] = claude_file
-        sync.agents["cursor"]["path"] = cursor_file
+        sync.agents = {
+            "claude": {"path": claude_file, "name": "Claude Code", "description": ""},
+            "cursor": {"path": cursor_file, "name": "Cursor", "description": ""},
+        }
 
         # Create only Claude file with a shared rule
         claude_file.write_text("# Shared Rules\n- rule from claude\n## Claude Code Specific\n")

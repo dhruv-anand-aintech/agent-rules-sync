@@ -74,10 +74,15 @@ class AgentSkillsSync:
                 "path": Path.home() / ".agents" / "skills",
                 "description": "Shared ~/.agents/skills (Codex, OpenCode, Claude)",
             },
-            "gemini": {
+            "gemini-antigravity": {
                 "name": "Gemini Antigravity",
                 "path": Path.home() / ".gemini" / "antigravity" / "skills",
                 "description": "Gemini Antigravity skills",
+            },
+            "gemini-cli": {
+                "name": "Gemini CLI",
+                "path": Path.home() / ".gemini" / "skills",
+                "description": "Gemini CLI skills",
             },
             "opencode": {
                 "name": "OpenCode",
