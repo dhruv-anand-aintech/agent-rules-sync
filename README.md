@@ -76,7 +76,7 @@ Skills are directories containing a `SKILL.md` file. Synced across all framework
 | OpenCode | `~/.config/opencode/skills/` |
 | Shared | `~/.agents/skills/` |
 
-Newest version wins. Add a skill anywhere and it appears everywhere within 3 seconds.
+Newest version wins. Add a skill anywhere and the daemon syncs it to the other locations automatically.
 
 ### 3. Settings & Hooks (Claude Code)
 
