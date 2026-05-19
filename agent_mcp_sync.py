@@ -6,6 +6,7 @@ Targets:
 - Claude Code: ~/.claude.json
 - Cursor: ~/.cursor/mcp.json
 - Gemini CLI: ~/.gemini/mcp.json
+- OpenCode: ~/.config/opencode/opencode.json
 - Claude Desktop: ~/Library/Application Support/Claude/claude_desktop_config.json (macOS)
                  ~/.config/Claude/claude_desktop_config.json (Linux)
 
@@ -21,6 +22,8 @@ import hashlib
 from pathlib import Path
 import shutil
 from datetime import datetime
+import re
+import toml
 
 class AgentMcpSync:
     """Manages synchronization of MCP server configurations."""
@@ -48,6 +51,20 @@ class AgentMcpSync:
             "claude-desktop": {
                 "name": "Claude Desktop",
                 "path": self._get_claude_desktop_path(),
+            },
+            "opencode": {
+                "name": "OpenCode",
+                "path": Path.home() / ".config" / "opencode" / "opencode.json",
+                "mcp_key": "mcp",
+                "from_internal": self._to_opencode_format,
+            },
+            "codex": {
+                "name": "Codex",
+                "path": Path.home() / ".codex" / "config.toml",
+                "mcp_key": "mcp_servers",
+                "from_internal": self._to_codex_toml_format,
+                "from_file": self._from_codex_file,
+                "format": "toml",
             }
         }
 
@@ -76,19 +93,137 @@ class AgentMcpSync:
         except Exception:
             pass
 
-    def _get_mcp_servers(self, path: Path) -> dict:
-        """Extract mcpServers from a file."""
+    def _to_opencode_format(self, servers: dict) -> dict:
+        """Convert internal format to OpenCode's mcp format (adds type field)."""
+        result = {}
+        for name, cfg in servers.items():
+            new_cfg = dict(cfg)
+            if "url" in new_cfg:
+                new_cfg["type"] = "remote"
+            elif "command" in new_cfg:
+                new_cfg["type"] = "stdio"
+            result[name] = new_cfg
+        return result
+
+    def _to_codex_toml_format(self, servers: dict) -> dict:
+        """Convert internal format to Codex's config.toml MCP format."""
+        result = {}
+        for name, cfg in servers.items():
+            new_cfg = {}
+            if "command" in cfg:
+                new_cfg["type"] = "stdio"
+                new_cfg["command"] = cfg.get("command")
+                if "args" in cfg and cfg["args"]:
+                    new_cfg["args"] = cfg["args"]
+            if "url" in cfg:
+                new_cfg["type"] = "remote"
+                new_cfg["url"] = cfg.get("url")
+            if "env" in cfg and cfg["env"]:
+                new_cfg["env"] = cfg["env"]
+            if "headers" in cfg and cfg["headers"]:
+                new_cfg["http_headers"] = cfg["headers"]
+            # preserve any extra keys if present
+            for key, value in cfg.items():
+                if key in {"type", "command", "args", "url", "env", "headers", "description"}:
+                    continue
+                if key not in new_cfg:
+                    new_cfg[key] = value
+            result[name] = new_cfg
+        return result
+
+    def _from_codex_file(self, path: Path, info: dict) -> dict:
+        try:
+            data = toml.loads(path.read_text())
+            mcp_key = info.get("mcp_key", "mcp_servers")
+            raw = data.get(mcp_key, {})
+            result = {}
+            for name, cfg in raw.items():
+                if not isinstance(cfg, dict):
+                    continue
+                new_cfg = dict(cfg)
+                if "http_headers" in new_cfg:
+                    new_cfg["headers"] = new_cfg.pop("http_headers")
+                # keep legacy type/url/command/args/env exactly as-is
+                result[name] = new_cfg
+            return result
+        except Exception:
+            return {}
+
+    def _quote_toml_key(self, key: str) -> str:
+        return json.dumps(key)
+
+    def _format_toml_value(self, value):
+        if isinstance(value, str):
+            return json.dumps(value)
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, (int, float)):
+            return str(value)
+        if isinstance(value, list):
+            return json.dumps(value)
+        if isinstance(value, dict):
+            # Inline table representation keeps the file easy for Codex to parse.
+            return "{" + ", ".join(
+                f"{json.dumps(k)} = {self._format_toml_value(v)}" for k, v in value.items()
+            ) + "}"
+        if value is None:
+            return "null"
+        return json.dumps(value)
+
+    def _update_toml_mcp_section(self, path: Path, servers: dict):
+        text = path.read_text() if path.exists() else ""
+        lines = text.splitlines()
+        cleaned = []
+        skipping = False
+
+        for line in lines:
+            stripped = line.strip()
+            if re.match(r"^\[mcp_servers(\.|\])", stripped):
+                skipping = True
+                continue
+            if skipping:
+                if stripped.startswith("[") and stripped.endswith("]"):
+                    skipping = False
+                else:
+                    continue
+            if not skipping:
+                cleaned.append(line)
+
+        output = [l for l in cleaned if l.strip()]
+        if output and output[-1].strip() != "":
+            output.append("")
+
+        for name in sorted(servers):
+            cfg = servers[name]
+            quoted_name = self._quote_toml_key(name)
+            output.append(f'[mcp_servers.{quoted_name}]')
+            for k, v in cfg.items():
+                if k == "http_headers":
+                    continue
+                output.append(f"{k} = {self._format_toml_value(v)}")
+            for k, v in cfg.items():
+                if k != "http_headers" or not isinstance(v, dict):
+                    continue
+                output.append(f"[mcp_servers.{quoted_name}.http_headers]")
+                for hk, hv in v.items():
+                    output.append(f"{hk} = {self._format_toml_value(hv)}")
+            output.append("")
+
+        output_text = "\n".join(output).rstrip() + "\n"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(output_text)
+
+    def _get_mcp_servers(self, path: Path, info: dict = None) -> dict:
+        """Extract MCP servers from a file."""
         if not path.exists():
             return {}
         try:
+            if info and info.get("format") == "toml" and info.get("from_file"):
+                return info["from_file"](path, info)
             data = json.loads(path.read_text())
-            # Claude Desktop and Cursor usually have mcpServers at top level
-            if "mcpServers" in data:
-                return data["mcpServers"]
-            # Some files might just be the mcpServers object itself if small
-            # but we assume the standard wrapped format for now.
-            # If it doesn't have mcpServers, maybe it's the object? 
-            # Let's be cautious.
+            mcp_key = info.get("mcp_key", "mcpServers") if info else "mcpServers"
+            if mcp_key in data:
+                return data[mcp_key]
             return {}
         except Exception:
             return {}
@@ -123,7 +258,7 @@ class AgentMcpSync:
         for label, info in self.global_sources.items():
             path = info["path"]
             if path.exists():
-                servers = self._get_mcp_servers(path)
+                servers = self._get_mcp_servers(path, info)
                 for name, cfg in servers.items():
                     if name not in all_servers or direction != "push":
                         all_servers[name] = cfg
@@ -156,7 +291,7 @@ class AgentMcpSync:
         if direction in ("bidirectional", "push"):
             for label, info in self.global_sources.items():
                 path = info["path"]
-                self._update_target(path, all_servers, label, log)
+                self._update_target(path, all_servers, label, log, info)
 
             for repo in self.repo_paths:
                 # For repos, we might want to be more selective, but usually 
@@ -173,7 +308,7 @@ class AgentMcpSync:
                     if path.exists():
                          self._update_target(path, all_servers, f"repo:{repo.name}", log)
 
-    def _update_target(self, path: Path, servers: dict, label: str, log):
+    def _update_target(self, path: Path, servers: dict, label: str, log, info: dict = None):
         if not path.parent.exists():
             try:
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -187,12 +322,20 @@ class AgentMcpSync:
             except Exception:
                 pass
 
-        # We keep other keys (like OAuth session in ~/.claude.json) and only update mcpServers
         new_data = dict(current_data)
-        new_data["mcpServers"] = servers
-        
+        mcp_key = info.get("mcp_key", "mcpServers") if info else "mcpServers"
+        output_servers = servers
+        if info and "from_internal" in info:
+            output_servers = info["from_internal"](servers)
+        new_data[mcp_key] = output_servers
+
         new_json = json.dumps(new_data, indent=2) + "\n"
-        
+
+        if info and info.get("format") == "toml":
+            self._update_toml_mcp_section(path, output_servers)
+            log(f"[mcp] Synced {label} ({path.name})")
+            return
+
         if not path.exists() or path.read_text() != new_json:
             if path.exists():
                 self._backup_file(path, label)

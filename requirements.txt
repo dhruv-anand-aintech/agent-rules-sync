@@ -1,1 +1,2 @@
-# No external dependencies - uses Python standard library only
+toml>=0.10.0
+watchdog>=4.0.0

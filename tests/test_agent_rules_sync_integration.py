@@ -142,6 +142,52 @@ def test_delete_rule_from_master_only():
         assert "- rule to keep" in cursor_content, "Other rule should remain"
 
 
+def test_delete_agent_specific_from_master_only():
+    """Removing agent-specific bullets from master only must win (disk must not resurrect them)."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config_dir = Path(tmpdir)
+        master_file = config_dir / "RULES.md"
+        claude_file = config_dir / "claude.md"
+        cursor_file = config_dir / "cursor.md"
+
+        sync = AgentRulesSync()
+        sync.config_dir = config_dir
+        sync.master_file = master_file
+        sync.agents = {
+            "claude": {"path": claude_file, "name": "Claude Code", "description": ""},
+            "cursor": {"path": cursor_file, "name": "Cursor", "description": ""},
+        }
+
+        starter = (
+            "# Shared Rules\n- keep shared\n\n## Claude Code Specific\n"
+            "- claude spec to drop\n\n## Cursor Specific\n- cursor stays\n\n"
+        )
+        master_file.write_text(starter)
+        claude_file.write_text(starter)
+        cursor_file.write_text(starter)
+
+        sync.sync()
+
+        master_trim = (
+            "# Shared Rules\n- keep shared\n\n## Claude Code Specific\n\n"
+            "## Cursor Specific\n- cursor stays\n\n"
+        )
+        master_file.write_text(master_trim)
+        # Claude file still stale (daemon had not propagated trim yet — common user edit pattern)
+        claude_file.write_text(starter)
+
+        sync.sync()
+
+        master_content = master_file.read_text()
+        claude_content = claude_file.read_text()
+        cursor_content = cursor_file.read_text()
+        assert "- claude spec to drop" not in master_content
+        assert "- claude spec to drop" not in claude_content
+        assert "- cursor stays" in master_content
+        assert "- cursor stays" in cursor_content
+        assert "- keep shared" in claude_content
+
+
 def test_repo_claude_omitting_shared_rules_does_not_delete_globally():
     """Project CLAUDE.md often omits the full global shared list; that must not wipe ~/.claude."""
     with tempfile.TemporaryDirectory() as tmpdir:

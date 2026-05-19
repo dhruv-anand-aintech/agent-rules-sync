@@ -217,7 +217,8 @@ agent-sync sync [rules] [skills] [settings] [mcp] [all]
   hooks/                    (9+ locations)               (6+ locations)
 ```
 
-Daemon watches all locations every 3 seconds. Changes trigger immediate sync.
+Daemon watches all locations with filesystem events. A slow periodic rescan is
+kept as a fallback for missed events or platforms without an event backend.
 
 ## Backups
 

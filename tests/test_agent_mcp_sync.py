@@ -12,7 +12,8 @@ def temp_home(tmp_path):
     # Mock global paths
     (home / ".cursor").mkdir()
     (home / ".gemini").mkdir()
-    
+    (home / ".config" / "opencode").mkdir(parents=True)
+
     # Library/Application Support for macOS mock
     (home / "Library" / "Application Support" / "Claude").mkdir(parents=True)
     
@@ -95,11 +96,68 @@ def test_mcp_sync_preserves_other_keys(mcp_syncer, temp_home):
             "s1": {"command": "c1"}
         }
     }))
-    
+
     # Sync
     mcp_syncer.sync(direction="bidirectional")
-    
+
     # Verify Claude Code still has OAuth
     claude_data = json.loads(claude_code_path.read_text())
     assert claude_data["oauth"] == "secret-token"
     assert "s1" in claude_data["mcpServers"]
+
+
+def test_mcp_sync_opencode_bidirectional(mcp_syncer, temp_home):
+    claude_code_path = temp_home / ".claude.json"
+    claude_code_path.write_text(json.dumps({
+        "mcpServers": {
+            "html-portal": {"type": "stdio", "command": "tsx", "args": ["index.ts"]}
+        }
+    }))
+
+    opencode_path = temp_home / ".config" / "opencode" / "opencode.json"
+    opencode_path.write_text(json.dumps({
+        "$schema": "https://opencode.ai/config.json",
+        "permission": "allow",
+        "mcp": {
+            "context7": {"type": "remote", "url": "https://mcp.context7.com/mcp"}
+        }
+    }))
+
+    mcp_syncer.sync(direction="bidirectional")
+
+    master_data = json.loads(mcp_syncer.master_file.read_text())
+    assert "html-portal" in master_data["mcpServers"]
+    assert "context7" in master_data["mcpServers"]
+
+    opencode_data = json.loads(opencode_path.read_text())
+    assert "html-portal" in opencode_data["mcp"]
+    assert opencode_data["mcp"]["html-portal"]["type"] == "stdio"
+    assert "context7" in opencode_data["mcp"]
+    assert "$schema" in opencode_data
+
+    claude_data = json.loads(claude_code_path.read_text())
+    assert "context7" in claude_data["mcpServers"]
+
+
+def test_mcp_sync_opencode_preserves_top_level_keys(mcp_syncer, temp_home):
+    opencode_path = temp_home / ".config" / "opencode" / "opencode.json"
+    opencode_path.write_text(json.dumps({
+        "$schema": "https://opencode.ai/config.json",
+        "permission": "deny",
+        "agent": {"general": {"model": "claude"}},
+        "mcp": {}
+    }))
+
+    claude_code_path = temp_home / ".claude.json"
+    claude_code_path.write_text(json.dumps({
+        "mcpServers": {"s1": {"command": "c1"}}
+    }))
+
+    mcp_syncer.sync(direction="bidirectional")
+
+    opencode_data = json.loads(opencode_path.read_text())
+    assert opencode_data["$schema"] == "https://opencode.ai/config.json"
+    assert opencode_data["permission"] == "deny"
+    assert opencode_data["agent"] == {"general": {"model": "claude"}}
+    assert "s1" in opencode_data["mcp"]
+    assert opencode_data["mcp"]["s1"]["type"] == "stdio"

@@ -144,10 +144,11 @@ class AgentSkillsSync:
             return None
         hasher = hashlib.sha256()
         for f in sorted(skill_path.rglob("*")):
+            rel = f.relative_to(skill_path)
             if f.is_file() and not any(
-                p.startswith(".") or p == "__pycache__" for p in f.parts
+                p.startswith(".") or p == "__pycache__" for p in rel.parts
             ):
-                hasher.update(str(f.relative_to(skill_path)).encode())
+                hasher.update(str(rel).encode())
                 hasher.update(f.read_bytes())
         return hasher.hexdigest()
 

@@ -27,6 +27,7 @@ import sys
 import time
 import hashlib
 import threading
+import queue
 from pathlib import Path
 from datetime import datetime
 import shutil
@@ -130,6 +131,109 @@ class AgentRulesSync:
     def state_file(self):
         """Previous sync’s shared bullets; always under the active config_dir."""
         return self.config_dir / "sync_state.txt"
+
+    @property
+    def agent_specific_state_file(self):
+        """Last sync: merged agent-specific bullets plus master snapshot (for trim wins)."""
+        return self.config_dir / "sync_state_agent_rules.json"
+
+    def _load_previous_agent_specific_state(self):
+        """Load prior merged + master snapshots per agent. None if missing or invalid."""
+        import json
+
+        path = self.agent_specific_state_file
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+
+        agents = data.get("agents")
+        if not isinstance(agents, dict):
+            return None
+
+        out = {}
+        for aid, entry in agents.items():
+            aid_s = str(aid)
+            if isinstance(entry, list):
+                s = {x.strip() for x in entry if isinstance(x, str) and x.strip().startswith("-")}
+                out[aid_s] = {"merged": s, "master_snap": set(s)}
+            elif isinstance(entry, dict):
+                merged = entry.get("merged") or []
+                snap = entry.get("master_snap")
+                if snap is None:
+                    snap = merged
+                mset = {
+                    x.strip()
+                    for x in merged
+                    if isinstance(x, str) and x.strip().startswith("-")
+                }
+                sset_raw = snap if isinstance(snap, list) else []
+                sset = {
+                    x.strip()
+                    for x in sset_raw
+                    if isinstance(x, str) and x.strip().startswith("-")
+                }
+                if not sset:
+                    sset = set(mset)
+                out[aid_s] = {"merged": mset, "master_snap": sset}
+        return out
+
+    def _save_agent_specific_state(self, merged_by_agent, master_snap_by_agent):
+        """Persist merged output + this run's master agent sections."""
+        import json
+
+        agents_out = {}
+        for aid in self.agents:
+            key = aid
+            mer = merged_by_agent.get(key, set())
+            if not isinstance(mer, set):
+                mer = set(mer or [])
+            snap = master_snap_by_agent.get(key, set())
+            if not isinstance(snap, set):
+                snap = set(snap or [])
+            agents_out[key] = {
+                "merged": sorted(mer),
+                "master_snap": sorted(snap),
+            }
+
+        payload = {"version": 2, "agents": agents_out}
+        try:
+            self.agent_specific_state_file.write_text(
+                json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+    def _apply_agent_specific_trim_from_master(
+        self,
+        master_agent_rules,
+        master_snap_by_agent,
+        previous_agent_state,
+    ):
+        """If user removed bullets from master's agent sections, drop them even if disks still carry them."""
+        if not previous_agent_state:
+            return
+
+        for agent_id in self.agents:
+            prev = previous_agent_state.get(agent_id)
+            if not prev:
+                continue
+            prev_merged = prev.get("merged") or set()
+            prev_snap = prev.get("master_snap")
+            if not prev_snap:
+                prev_snap = set(prev_merged)
+
+            mast_now = master_snap_by_agent.get(agent_id) or set()
+            merged_local = master_agent_rules.get(agent_id)
+            if not isinstance(merged_local, set):
+                continue
+
+            for rule in prev_merged:
+                if rule not in mast_now and rule in prev_snap:
+                    merged_local.discard(rule)
 
     def _load_repo_agent_paths(self):
         """Add configured repos' CLAUDE.md as rules sync targets."""
@@ -486,9 +590,13 @@ class AgentRulesSync:
                 master_content = f.read()
 
             master_shared = self._extract_shared_rules(master_content)
+            prior_agent_specific = self._load_previous_agent_specific_state()
+            master_snap_by_agent = {}
             master_agent_rules = {}
             for agent_id in self.agents:
-                master_agent_rules[agent_id] = self._extract_agent_rules(master_content, agent_id)
+                snap = self._extract_agent_rules(master_content, agent_id)
+                master_snap_by_agent[agent_id] = set(snap)
+                master_agent_rules[agent_id] = set(snap)
 
             # Step 3: Collect all shared rules (union for additions)
             all_shared_rules = set(master_shared)
@@ -515,7 +623,13 @@ class AgentRulesSync:
             self._merge_cursor_rule_files(master_agent_rules, all_shared_rules)
             self._merge_cursorrules_legacy_into_cursor(master_agent_rules, all_shared_rules)
 
-            # Step 4: Detect deletions
+            self._apply_agent_specific_trim_from_master(
+                master_agent_rules,
+                master_snap_by_agent,
+                prior_agent_specific,
+            )
+
+            # Step 4: Detect deletions (shared bullets only — agent-specific trims above)
             # If we have previous state, remove rules that were deleted from ANY file
             if previous_shared is not None:
                 # Check if any previously-existing rule is now missing from ANY file
@@ -590,6 +704,7 @@ class AgentRulesSync:
 
             # Step 5: Save current state for next sync's deletion detection
             self._save_shared_rules_state(master_shared)
+            self._save_agent_specific_state(master_agent_rules, master_snap_by_agent)
 
             # Step 6: Sync skills across frameworks (respects direction config)
             if self.sync_config.enabled("skills"):
@@ -643,16 +758,31 @@ class AgentRulesSync:
         except Exception:
             pass
 
-    def watch(self, interval=3):
-        """Watch for changes and auto-sync."""
-        # Save PID so status and guardian can track us
-        try:
-            with open(self.pid_file, 'w') as f:
-                f.write(str(os.getpid()))
-        except Exception:
-            pass
+    def _refresh_watch_state_after_sync(
+        self,
+        file_hashes,
+        skill_hashes,
+        settings_hashes,
+        mcp_hashes,
+    ):
+        """Re-read hashes after sync() so MCP/files updated by sync don't leave stale watch state."""
+        file_hashes["master"] = self._get_file_hash(self.master_file)
+        for agent_id, config in self.agents.items():
+            if agent_id == "cursor":
+                for key, p in self._cursor_watch_pairs():
+                    file_hashes[key] = self._get_file_hash(p)
+                continue
+            file_hashes[agent_id] = self._get_file_hash(config["path"])
+        for key, p in self._cursorrules_watch_pairs():
+            file_hashes[key] = self._get_file_hash(p)
+        skill_hashes.clear()
+        skill_hashes.update(self.skills_sync.get_watch_paths_and_hashes())
+        settings_hashes.clear()
+        settings_hashes.update(self.settings_sync.get_watch_hashes())
+        mcp_hashes.clear()
+        mcp_hashes.update(self.mcp_sync.get_watch_hashes())
 
-        # Store initial hashes for rules
+    def _build_watch_state(self):
         file_hashes = {}
         file_hashes["master"] = self._get_file_hash(self.master_file)
         for agent_id, config in self.agents.items():
@@ -664,71 +794,221 @@ class AgentRulesSync:
         for key, p in self._cursorrules_watch_pairs():
             file_hashes[key] = self._get_file_hash(p)
 
-        # Store initial hashes for skills and settings
-        skill_hashes = self.skills_sync.get_watch_paths_and_hashes()
-        settings_hashes = self.settings_sync.get_watch_hashes()
-        mcp_hashes = self.mcp_sync.get_watch_hashes()
+        return (
+            file_hashes,
+            self.skills_sync.get_watch_paths_and_hashes(),
+            self.settings_sync.get_watch_hashes(),
+            self.mcp_sync.get_watch_hashes(),
+        )
 
-        print(f"🔄 Watching for changes (every {interval}s)...")
+    def _detect_watch_changes(
+        self,
+        file_hashes,
+        skill_hashes,
+        settings_hashes,
+        mcp_hashes,
+    ):
+        changed = False
+
+        master_hash = self._get_file_hash(self.master_file)
+        if master_hash != file_hashes.get("master"):
+            changed = True
+            file_hashes["master"] = master_hash
+
+        for agent_id, config in self.agents.items():
+            if agent_id == "cursor":
+                for key, p in self._cursor_watch_pairs():
+                    current_hash = self._get_file_hash(p)
+                    if current_hash != file_hashes.get(key):
+                        changed = True
+                        file_hashes[key] = current_hash
+                continue
+            current_hash = self._get_file_hash(config["path"])
+            if current_hash != file_hashes.get(agent_id):
+                changed = True
+                file_hashes[agent_id] = current_hash
+
+        for key, p in self._cursorrules_watch_pairs():
+            current_hash = self._get_file_hash(p)
+            if current_hash != file_hashes.get(key):
+                changed = True
+                file_hashes[key] = current_hash
+
+        if self.skills_sync.skills_changed(skill_hashes):
+            changed = True
+            skill_hashes.clear()
+            skill_hashes.update(self.skills_sync.get_watch_paths_and_hashes())
+
+        if self.settings_sync.settings_changed(settings_hashes):
+            changed = True
+            settings_hashes.clear()
+            settings_hashes.update(self.settings_sync.get_watch_hashes())
+
+        if self.mcp_sync.mcp_changed(mcp_hashes):
+            changed = True
+            mcp_hashes.clear()
+            mcp_hashes.update(self.mcp_sync.get_watch_hashes())
+
+        return changed
+
+    def _event_watch_roots(self, file_hashes, settings_hashes, mcp_hashes):
+        roots = {
+            self.config_dir,
+            self.master_file.parent,
+            self.skills_sync.master_skills_dir,
+        }
+
+        for config in self.agents.values():
+            roots.add(config["path"].parent)
+        if self._cursor_layout_is_canonical():
+            roots.add(self._cursor_primary_path().parent)
+        for _, p in self._cursorrules_watch_pairs():
+            roots.add(p.parent)
+
+        for fw in self.skills_sync.frameworks.values():
+            roots.add(fw["path"])
+
+        for path in settings_hashes:
+            roots.add(path.parent)
+        for path in mcp_hashes:
+            roots.add(path.parent)
+
+        if hasattr(self.settings_sync, "repo_paths"):
+            for repo in self.settings_sync.repo_paths:
+                roots.add(repo / ".claude")
+                roots.add(repo / ".claude" / "hooks")
+                roots.add(repo / ".gemini")
+                roots.add(repo / ".gemini" / "hooks")
+        if hasattr(self.mcp_sync, "repo_paths"):
+            for repo in self.mcp_sync.repo_paths:
+                roots.add(repo)
+                roots.add(repo / ".cursor")
+                roots.add(repo / ".gemini")
+
+        existing = []
+        seen = set()
+        for root in roots:
+            try:
+                root = Path(root).expanduser()
+                root.mkdir(parents=True, exist_ok=True)
+                resolved = root.resolve()
+            except Exception:
+                continue
+            if resolved not in seen:
+                seen.add(resolved)
+                existing.append(resolved)
+        return existing
+
+    def _run_polling_watch_loop(
+        self,
+        interval,
+        file_hashes,
+        skill_hashes,
+        settings_hashes,
+        mcp_hashes,
+    ):
+        self._log_message(f"Event watcher unavailable; using polling every {interval}s")
+        while not self.stop_event.is_set():
+            time.sleep(interval)
+            if self._detect_watch_changes(file_hashes, skill_hashes, settings_hashes, mcp_hashes):
+                self.sync()
+                self._refresh_watch_state_after_sync(
+                    file_hashes, skill_hashes, settings_hashes, mcp_hashes
+                )
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                msg = "✓ Synced rules and skills across all agents"
+                print(f"[{timestamp}] {msg}")
+                self._log_message(msg)
+
+    def _run_event_watch_loop(
+        self,
+        interval,
+        file_hashes,
+        skill_hashes,
+        settings_hashes,
+        mcp_hashes,
+    ):
+        try:
+            from watchdog.events import FileSystemEventHandler
+            from watchdog.observers import Observer
+        except ImportError:
+            self._run_polling_watch_loop(
+                interval, file_hashes, skill_hashes, settings_hashes, mcp_hashes
+            )
+            return
+
+        event_queue = queue.Queue()
+
+        class SyncEventHandler(FileSystemEventHandler):
+            def on_any_event(self, event):
+                if event.event_type in {"opened", "closed_no_write"}:
+                    return
+                event_queue.put(event)
+
+        observer = Observer()
+        for root in self._event_watch_roots(file_hashes, settings_hashes, mcp_hashes):
+            observer.schedule(SyncEventHandler(), str(root), recursive=True)
+
+        observer.start()
+        self._log_message("Event watch started")
+        try:
+            while not self.stop_event.is_set():
+                try:
+                    event_queue.get(timeout=300)
+                except queue.Empty:
+                    changed = self._detect_watch_changes(
+                        file_hashes, skill_hashes, settings_hashes, mcp_hashes
+                    )
+                else:
+                    time.sleep(0.75)
+                    while True:
+                        try:
+                            event_queue.get_nowait()
+                        except queue.Empty:
+                            break
+                    changed = self._detect_watch_changes(
+                        file_hashes, skill_hashes, settings_hashes, mcp_hashes
+                    )
+
+                if changed:
+                    self.sync()
+                    self._refresh_watch_state_after_sync(
+                        file_hashes, skill_hashes, settings_hashes, mcp_hashes
+                    )
+                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    msg = "✓ Synced rules and skills across all agents"
+                    print(f"[{timestamp}] {msg}")
+                    self._log_message(msg)
+        finally:
+            observer.stop()
+            observer.join()
+
+    def watch(self, interval=3):
+        """Watch for changes and auto-sync."""
+        # Save PID so status and guardian can track us
+        try:
+            with open(self.pid_file, 'w') as f:
+                f.write(str(os.getpid()))
+        except Exception:
+            pass
+
+        file_hashes, skill_hashes, settings_hashes, mcp_hashes = self._build_watch_state()
+
+        print("🔄 Watching for changes (filesystem events)...")
         print(f"Edit rules or skills in any agent - changes auto-sync!\n")
         self._log_message("Watch started")
 
         # Initial sync to ensure rules and skills are propagated
         self.sync()
+        self._refresh_watch_state_after_sync(
+            file_hashes, skill_hashes, settings_hashes, mcp_hashes
+        )
         self._log_message("Initial sync complete")
 
         try:
-            while True:
-                time.sleep(interval)
-
-                # Check if any rules file changed
-                master_hash = self._get_file_hash(self.master_file)
-                changed = False
-
-                if master_hash != file_hashes["master"]:
-                    changed = True
-                    file_hashes["master"] = master_hash
-
-                for agent_id, config in self.agents.items():
-                    if agent_id == "cursor":
-                        for key, p in self._cursor_watch_pairs():
-                            current_hash = self._get_file_hash(p)
-                            if current_hash != file_hashes.get(key):
-                                changed = True
-                                file_hashes[key] = current_hash
-                        continue
-                    current_hash = self._get_file_hash(config["path"])
-                    if current_hash != file_hashes[agent_id]:
-                        changed = True
-                        file_hashes[agent_id] = current_hash
-
-                for key, p in self._cursorrules_watch_pairs():
-                    current_hash = self._get_file_hash(p)
-                    if current_hash != file_hashes.get(key):
-                        changed = True
-                        file_hashes[key] = current_hash
-
-                # Check if any skills changed
-                if self.skills_sync.skills_changed(skill_hashes):
-                    changed = True
-                    skill_hashes = self.skills_sync.get_watch_paths_and_hashes()
-
-                # Check if settings or hook scripts changed
-                if self.settings_sync.settings_changed(settings_hashes):
-                    changed = True
-                    settings_hashes = self.settings_sync.get_watch_hashes()
-
-                # Check if MCP servers changed
-                if self.mcp_sync.mcp_changed(mcp_hashes):
-                    changed = True
-                    mcp_hashes = self.mcp_sync.get_watch_hashes()
-
-                if changed:
-                    self.sync()
-                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    msg = f"✓ Synced rules and skills across all agents"
-                    print(f"[{timestamp}] {msg}")
-                    self._log_message(msg)
+            self._run_event_watch_loop(
+                interval, file_hashes, skill_hashes, settings_hashes, mcp_hashes
+            )
 
         except KeyboardInterrupt:
             print("\n✓ Watch mode stopped")
@@ -890,76 +1170,10 @@ class AgentRulesSync:
         """Start daemon on Windows using background thread."""
         def daemon_thread():
             try:
-                with open(self.pid_file, 'w') as f:
-                    f.write(str(os.getpid()))
-
                 log_file = self.config_dir / "daemon.log"
                 with open(log_file, 'a') as f:
                     f.write(f"\n--- Session started {datetime.now()} ---\n")
-
-                # Watch without printing to console
-                file_hashes = {}
-                file_hashes["master"] = self._get_file_hash(self.master_file)
-                for agent_id, config in self.agents.items():
-                    if agent_id == "cursor":
-                        for key, p in self._cursor_watch_pairs():
-                            file_hashes[key] = self._get_file_hash(p)
-                        continue
-                    file_hashes[agent_id] = self._get_file_hash(config["path"])
-                for key, p in self._cursorrules_watch_pairs():
-                    file_hashes[key] = self._get_file_hash(p)
-                skill_hashes = self.skills_sync.get_watch_paths_and_hashes()
-                settings_hashes = self.settings_sync.get_watch_hashes()
-                mcp_hashes = self.mcp_sync.get_watch_hashes()
-
-                # Initial sync
-                self.sync()
-
-                # Use stop_event to allow graceful shutdown
-                while not self.stop_event.is_set():
-                    time.sleep(3)
-
-                    master_hash = self._get_file_hash(self.master_file)
-                    changed = False
-
-                    if master_hash != file_hashes["master"]:
-                        changed = True
-                        file_hashes["master"] = master_hash
-
-                    for agent_id, config in self.agents.items():
-                        if agent_id == "cursor":
-                            for key, p in self._cursor_watch_pairs():
-                                current_hash = self._get_file_hash(p)
-                                if current_hash != file_hashes.get(key):
-                                    changed = True
-                                    file_hashes[key] = current_hash
-                            continue
-                        current_hash = self._get_file_hash(config["path"])
-                        if current_hash != file_hashes[agent_id]:
-                            changed = True
-                            file_hashes[agent_id] = current_hash
-
-                    for key, p in self._cursorrules_watch_pairs():
-                        current_hash = self._get_file_hash(p)
-                        if current_hash != file_hashes.get(key):
-                            changed = True
-                            file_hashes[key] = current_hash
-
-                    if self.skills_sync.skills_changed(skill_hashes):
-                        changed = True
-                        skill_hashes = self.skills_sync.get_watch_paths_and_hashes()
-
-                    if self.settings_sync.settings_changed(settings_hashes):
-                        changed = True
-                        settings_hashes = self.settings_sync.get_watch_hashes()
-
-                    if self.mcp_sync.mcp_changed(mcp_hashes):
-                        changed = True
-                        mcp_hashes = self.mcp_sync.get_watch_hashes()
-
-                    if changed:
-                        self.sync()
-                        self._log_message("✓ Synced rules and skills")
+                self.watch(interval=3)
 
             except Exception as e:
                 self._log_error(str(e))

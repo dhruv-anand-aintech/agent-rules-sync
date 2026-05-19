@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+## [1.5.1] - 2026-05-19
+
+### Daemon
+
+- Switch daemon watching from fixed 3-second polling to filesystem events via `watchdog`, with a slow fallback rescan and polling fallback when the event backend is unavailable.
+- Fix skill content hashing for skills stored under hidden directories like `~/.codex/skills`, so changes to `SKILL.md` files are detected correctly.
+
+### Rules sync
+
+- **Master wins on agent-specific bullets**: Persist per-agent merged state (`sync_state_agent_rules.json`) so removing lines under `## … Specific` from the hidden master no longer reappears because a framework file (`~/.agent/AGENT.md`, etc.) still carried them during bidirectional union.
+
+### MCP sync
+
+- Add Codex `config.toml` MCP sync support and OpenCode MCP format support.
+
 ## [1.4.6] - 2026-05-12
 
 ### 🛡️ Guardian Migration

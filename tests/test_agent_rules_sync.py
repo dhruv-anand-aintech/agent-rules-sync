@@ -57,23 +57,32 @@ def test_ensure_master_has_all_sections():
     with tempfile.TemporaryDirectory() as tmpdir:
         config_dir = Path(tmpdir)
         master_file = config_dir / "RULES.md"
+        snippet = "# Shared Rules\n- test rule\n"
 
         sync = AgentRulesSync()
+        # Isolate from ~/.config/agent-rules-sync so repo_paths and defaults do not leak in.
         sync.config_dir = config_dir
         sync.master_file = master_file
+        claude_f = config_dir / "CLAUDE.md"
+        cursor_f = config_dir / "cursor.mdc"
+        gemini_f = config_dir / "GEMINI.md"
+        opencode_f = config_dir / "AGENTS.md"
+        for p in (claude_f, cursor_f, gemini_f, opencode_f):
+            p.write_text(snippet)
 
-        # Create empty agent file
-        agent_path = config_dir / "test_agent.md"
-        agent_path.write_text("# Shared Rules\n- test rule\n")
-
-        sync.agents["test"] = {"path": agent_path, "name": "Test", "description": ""}
+        sync.agents = {
+            "claude": {"path": claude_f, "name": "Claude Code", "description": ""},
+            "cursor": {"path": cursor_f, "name": "Cursor", "description": ""},
+            "gemini": {"path": gemini_f, "name": "Gemini", "description": ""},
+            "opencode": {"path": opencode_f, "name": "OpenCode", "description": ""},
+        }
         sync._ensure_master_exists()
 
         content = master_file.read_text()
         assert "# Shared Rules" in content
         assert "## Claude Code Specific" in content
         assert "## Cursor Specific" in content
-        assert "## Gemini Antigravity Specific" in content
+        assert "## Gemini Specific" in content
         assert "## OpenCode Specific" in content
 
 def test_sync_merges_shared_rules():
