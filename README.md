@@ -27,6 +27,7 @@ agent-sync sync rules              # sync only CLAUDE.md / rules files
 agent-sync sync skills             # sync only skills directories
 agent-sync sync settings           # sync only .claude/settings.json + hooks
 agent-sync sync mcp                # sync only mcp.json / MCP server configs
+agent-sync sync history            # import agent-run shell commands into Atuin
 agent-sync sync rules skills       # multiple scopes
 agent-sync setup                   # TUI wizard to configure sync directions
 agent-sync status                  # daemon and sync status
@@ -56,7 +57,8 @@ Monitored locations:
 | Claude Code | `~/.claude/CLAUDE.md` |
 | Cursor | `~/.cursor/rules/global.mdc` (merged **output**); also reads every `*.md` / `*.mdc` in the **same** `~/.cursor/rules/` dir (subfolders except `imported/`). Strip YAML frontmatter before parsing. |
 | Cursor (legacy) | `~/.cursorrules` plus `<repo>/.cursorrules` for each path in `repo_paths.json` — same body as `global.mdc`; Cursor still loads these ([docs](https://cursor.com/docs/rules)) |
-| Gemini Antigravity | `~/.gemini/GEMINI.md` |
+| Gemini CLI | `~/.gemini/GEMINI.md` |
+| Antigravity CLI | `~/.gemini/antigravity-cli/plugins/agent-rules-sync/rules/AGENTS.md` |
 | OpenCode | `~/.config/opencode/AGENTS.md` |
 | Codex | `~/.codex/AGENTS.md` |
 | + 4 more | `~/.config/agents/AGENTS.md`, `~/.config/AGENTS.md`, `~/.agent/AGENTS.md`, `~/.agent/AGENT.md` |
@@ -72,6 +74,7 @@ Skills are directories containing a `SKILL.md` file. Synced across all framework
 | Claude Code | `~/.claude/skills/` |
 | Cursor | `~/.cursor/skills/`, `~/.cursor/skills-cursor/` |
 | Codex | `~/.codex/skills/` |
+| Antigravity CLI | `~/.gemini/antigravity-cli/plugins/agent-rules-sync/skills/` |
 | Gemini Antigravity | `~/.gemini/antigravity/skills/` |
 | OpenCode | `~/.config/opencode/skills/` |
 | Shared | `~/.agents/skills/` |
@@ -98,9 +101,25 @@ Synchronizes your **MCP server list** (under the `mcpServers` key) across all ag
 | Claude Code | `~/.claude.json` |
 | Cursor | `~/.cursor/mcp.json` |
 | Gemini CLI | `~/.gemini/mcp.json` |
+| Antigravity CLI | `~/.gemini/antigravity-cli/plugins/agent-rules-sync/mcp_config.json` |
 | Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) |
 
 Project-specific MCP servers in `.mcp.json`, `.cursor/mcp.json`, or `.gemini/mcp.json` are also merged into the global master list and synced across agents.
+
+### 5. Agent Command History (Atuin)
+
+Imports shell commands run by coding agents into Atuin so they show up in zsh reverse search alongside normal terminal history. The importer reads local transcript stores, writes a normalized append-only log at `~/.config/agent-rules-sync/agent-command-history.jsonl`, and inserts new commands into `~/.local/share/atuin/history.db`.
+
+Supported transcript sources:
+| Agent | Source |
+|-------|--------|
+| Codex | `~/.codex/sessions/**/*.jsonl` |
+| Claude Code | `~/.claude/projects/**/*.jsonl` |
+| Cursor CLI | `~/.cursor/projects/**/agent-transcripts/**/*.jsonl` |
+
+Current stable Atuin releases do not yet expose first-class agent metadata in search, so imported commands include a harmless trailing tag like `# agent:codex`. Newer Atuin builds with `author` / `intent` columns receive those fields directly.
+
+The daemon watches these transcript roots too. When a transcript changes it imports only the changed transcript into the JSONL log and Atuin, without running a rules/skills/settings sync.
 
 ## Configuration
 
@@ -202,6 +221,7 @@ agent-sync sync [rules] [skills] [settings] [mcp] [all]
 | `skills` | Skill directories across all frameworks + configured repos |
 | `settings` | `~/.claude/settings.json` → repo `.claude/settings.json` + hooks |
 | `mcp` | MCP server configurations (`mcp.json`, `~/.claude.json`) |
+| `history` | Agent-run shell commands → Atuin history/backsearch |
 | `all` | All of the above (default when no scope given) |
 
 ## How It Works

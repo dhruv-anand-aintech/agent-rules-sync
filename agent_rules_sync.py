@@ -12,6 +12,7 @@ Edit your rules in any location:
     ~/.cursor/rules/*.md and *.mdc (merged; canonical write is global.mdc)
     ~/.cursorrules (legacy; mirrored from global.mdc, still supported by Cursor in project roots)
     ~/.gemini/GEMINI.md
+    ~/.gemini/antigravity-cli/plugins/agent-rules-sync/rules/AGENTS.md
     ~/.config/opencode/AGENTS.md
 
 Skills sync across:
@@ -36,7 +37,9 @@ import signal
 from agent_skills_sync import AgentSkillsSync
 from agent_settings_sync import AgentSettingsSync
 from agent_mcp_sync import AgentMcpSync
+from agent_history_sync import AgentHistorySync, ensure_atuin_installed, ensure_atuin_zsh
 from agent_sync_config import load_config, save_config, SyncConfig, DEFAULT_CONFIG, run_wizard
+from agent_antigravity_cli import ensure_plugin as ensure_antigravity_cli_plugin
 
 
 class AgentRulesSync:
@@ -71,6 +74,9 @@ class AgentRulesSync:
         # MCP sync (syncs mcp.json across Cursor, Claude, Gemini, etc.)
         self.mcp_sync = AgentMcpSync(config_dir=self.config_dir)
 
+        # History sync (imports agent-run shell commands into Atuin)
+        self.history_sync = AgentHistorySync(config_dir=self.config_dir)
+
         # Sync direction config
         self.sync_config = load_config(self.config_dir)
 
@@ -89,7 +95,12 @@ class AgentRulesSync:
             "gemini": {
                 "name": "Gemini",
                 "path": Path.home() / ".gemini" / "GEMINI.md",
-                "description": "Gemini CLI / Antigravity global rules",
+                "description": "Gemini CLI global rules",
+            },
+            "antigravity-cli": {
+                "name": "Antigravity CLI",
+                "path": Path.home() / ".gemini" / "antigravity-cli" / "plugins" / "agent-rules-sync" / "rules" / "AGENTS.md",
+                "description": "Antigravity CLI plugin rules",
             },
             "opencode": {
                 "name": "OpenCode",
@@ -683,6 +694,8 @@ class AgentRulesSync:
                 for agent_id, config in self.agents.items():
                     agent_path = config["path"]
                     try:
+                        if agent_id == "antigravity-cli":
+                            ensure_antigravity_cli_plugin()
                         agent_path.parent.mkdir(parents=True, exist_ok=True)
 
                         if agent_path.exists():
@@ -764,6 +777,7 @@ class AgentRulesSync:
         skill_hashes,
         settings_hashes,
         mcp_hashes,
+        history_hashes,
     ):
         """Re-read hashes after sync() so MCP/files updated by sync don't leave stale watch state."""
         file_hashes["master"] = self._get_file_hash(self.master_file)
@@ -781,6 +795,8 @@ class AgentRulesSync:
         settings_hashes.update(self.settings_sync.get_watch_hashes())
         mcp_hashes.clear()
         mcp_hashes.update(self.mcp_sync.get_watch_hashes())
+        history_hashes.clear()
+        history_hashes.update(self.history_sync.get_watch_paths_and_hashes())
 
     def _build_watch_state(self):
         file_hashes = {}
@@ -799,6 +815,7 @@ class AgentRulesSync:
             self.skills_sync.get_watch_paths_and_hashes(),
             self.settings_sync.get_watch_hashes(),
             self.mcp_sync.get_watch_hashes(),
+            self.history_sync.get_watch_paths_and_hashes(),
         )
 
     def _detect_watch_changes(
@@ -807,6 +824,7 @@ class AgentRulesSync:
         skill_hashes,
         settings_hashes,
         mcp_hashes,
+        history_hashes,
     ):
         changed = False
 
@@ -849,9 +867,11 @@ class AgentRulesSync:
             mcp_hashes.clear()
             mcp_hashes.update(self.mcp_sync.get_watch_hashes())
 
-        return changed
+        history_paths = self.history_sync.history_changed(history_hashes)
 
-    def _event_watch_roots(self, file_hashes, settings_hashes, mcp_hashes):
+        return changed, history_paths
+
+    def _event_watch_roots(self, file_hashes, settings_hashes, mcp_hashes, history_hashes):
         roots = {
             self.config_dir,
             self.master_file.parent,
@@ -871,6 +891,10 @@ class AgentRulesSync:
         for path in settings_hashes:
             roots.add(path.parent)
         for path in mcp_hashes:
+            roots.add(path.parent)
+        for root in self.history_sync.transcript_roots():
+            roots.add(root)
+        for path in history_hashes:
             roots.add(path.parent)
 
         if hasattr(self.settings_sync, "repo_paths"):
@@ -906,19 +930,29 @@ class AgentRulesSync:
         skill_hashes,
         settings_hashes,
         mcp_hashes,
+        history_hashes,
     ):
         self._log_message(f"Event watcher unavailable; using polling every {interval}s")
         while not self.stop_event.is_set():
             time.sleep(interval)
-            if self._detect_watch_changes(file_hashes, skill_hashes, settings_hashes, mcp_hashes):
+            changed, history_paths = self._detect_watch_changes(
+                file_hashes,
+                skill_hashes,
+                settings_hashes,
+                mcp_hashes,
+                history_hashes,
+            )
+            if changed:
                 self.sync()
                 self._refresh_watch_state_after_sync(
-                    file_hashes, skill_hashes, settings_hashes, mcp_hashes
+                    file_hashes, skill_hashes, settings_hashes, mcp_hashes, history_hashes
                 )
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 msg = "✓ Synced rules and skills across all agents"
                 print(f"[{timestamp}] {msg}")
                 self._log_message(msg)
+            if history_paths:
+                self._sync_history_paths(history_paths)
 
     def _run_event_watch_loop(
         self,
@@ -927,13 +961,14 @@ class AgentRulesSync:
         skill_hashes,
         settings_hashes,
         mcp_hashes,
+        history_hashes,
     ):
         try:
             from watchdog.events import FileSystemEventHandler
             from watchdog.observers import Observer
         except ImportError:
             self._run_polling_watch_loop(
-                interval, file_hashes, skill_hashes, settings_hashes, mcp_hashes
+                interval, file_hashes, skill_hashes, settings_hashes, mcp_hashes, history_hashes
             )
             return
 
@@ -946,7 +981,9 @@ class AgentRulesSync:
                 event_queue.put(event)
 
         observer = Observer()
-        for root in self._event_watch_roots(file_hashes, settings_hashes, mcp_hashes):
+        for root in self._event_watch_roots(
+            file_hashes, settings_hashes, mcp_hashes, history_hashes
+        ):
             observer.schedule(SyncEventHandler(), str(root), recursive=True)
 
         observer.start()
@@ -957,7 +994,11 @@ class AgentRulesSync:
                     event_queue.get(timeout=300)
                 except queue.Empty:
                     changed = self._detect_watch_changes(
-                        file_hashes, skill_hashes, settings_hashes, mcp_hashes
+                        file_hashes,
+                        skill_hashes,
+                        settings_hashes,
+                        mcp_hashes,
+                        history_hashes,
                     )
                 else:
                     time.sleep(0.75)
@@ -967,21 +1008,45 @@ class AgentRulesSync:
                         except queue.Empty:
                             break
                     changed = self._detect_watch_changes(
-                        file_hashes, skill_hashes, settings_hashes, mcp_hashes
+                        file_hashes,
+                        skill_hashes,
+                        settings_hashes,
+                        mcp_hashes,
+                        history_hashes,
                     )
 
+                changed, history_paths = changed
                 if changed:
                     self.sync()
                     self._refresh_watch_state_after_sync(
-                        file_hashes, skill_hashes, settings_hashes, mcp_hashes
+                        file_hashes, skill_hashes, settings_hashes, mcp_hashes, history_hashes
                     )
                     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     msg = "✓ Synced rules and skills across all agents"
                     print(f"[{timestamp}] {msg}")
                     self._log_message(msg)
+                if history_paths:
+                    self._sync_history_paths(history_paths)
         finally:
             observer.stop()
             observer.join()
+
+    def _sync_history_paths(self, history_paths):
+        paths = [path for path in history_paths if Path(path).is_file()]
+        if not paths:
+            return
+        try:
+            result = self.history_sync.sync(
+                log_callback=self._log_message,
+                paths=paths,
+            )
+        except Exception as e:
+            self._log_error(f"History sync error: {e}")
+            return
+        if result.get("imported", 0):
+            msg = f"✓ Imported {result['imported']} agent command(s) into Atuin"
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
+            self._log_message(msg)
 
     def watch(self, interval=3):
         """Watch for changes and auto-sync."""
@@ -992,7 +1057,9 @@ class AgentRulesSync:
         except Exception:
             pass
 
-        file_hashes, skill_hashes, settings_hashes, mcp_hashes = self._build_watch_state()
+        file_hashes, skill_hashes, settings_hashes, mcp_hashes, history_hashes = (
+            self._build_watch_state()
+        )
 
         print("🔄 Watching for changes (filesystem events)...")
         print(f"Edit rules or skills in any agent - changes auto-sync!\n")
@@ -1000,14 +1067,20 @@ class AgentRulesSync:
 
         # Initial sync to ensure rules and skills are propagated
         self.sync()
+        self.history_sync.sync(log_callback=self._log_message)
         self._refresh_watch_state_after_sync(
-            file_hashes, skill_hashes, settings_hashes, mcp_hashes
+            file_hashes, skill_hashes, settings_hashes, mcp_hashes, history_hashes
         )
         self._log_message("Initial sync complete")
 
         try:
             self._run_event_watch_loop(
-                interval, file_hashes, skill_hashes, settings_hashes, mcp_hashes
+                interval,
+                file_hashes,
+                skill_hashes,
+                settings_hashes,
+                mcp_hashes,
+                history_hashes,
             )
 
         except KeyboardInterrupt:
@@ -1215,7 +1288,7 @@ class AgentRulesSync:
                 pass
 
 
-SYNC_SCOPES = ["rules", "skills", "settings", "mcp", "all"]
+SYNC_SCOPES = ["rules", "skills", "settings", "mcp", "history", "all"]
 COMMANDS = ["sync", "delete-skill", "setup", "status", "stop", "watch", "daemon"]
 
 
@@ -1250,18 +1323,28 @@ def _run_sync(syncer, scopes):
         except Exception as e:
             print(f"  ✗ MCP error: {e}")
 
+    if "history" in scopes or "all" in scopes:
+        print("⟳ Syncing agent command history...")
+        try:
+            ensure_atuin_installed(log)
+            ensure_atuin_zsh(log)
+            result = syncer.history_sync.sync(log_callback=log)
+            print(f"  imported {result['imported']} new agent command(s)")
+        except Exception as e:
+            print(f"  ✗ History error: {e}")
+
     print("✓ Done")
 
 
 def main():
     parser = argparse.ArgumentParser(
         prog='agent-sync',
-        description='Sync rules, skills, and settings across AI coding assistants',
+        description='Sync rules, skills, settings, MCP, and agent command history across AI coding assistants',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Commands:
   agent-sync                         Start/ensure daemon is running
-  agent-sync sync [scope ...]        One-shot sync (scopes: rules skills settings all)
+  agent-sync sync [scope ...]        One-shot sync (scopes: rules skills settings mcp history all)
   agent-sync setup                   TUI wizard to configure sync directions
   agent-sync status                  Check daemon and sync status
   agent-sync stop                    Stop daemon
@@ -1272,6 +1355,7 @@ Sync scope examples:
   agent-sync sync rules              Sync only CLAUDE.md / rules files
   agent-sync sync skills             Sync only skills directories
   agent-sync sync settings           Sync only .claude/settings.json + hooks
+  agent-sync sync history            Import agent-run shell commands into Atuin
   agent-sync sync rules skills       Sync rules and skills
   agent-sync delete-skill <name>     Delete a skill from master and all frameworks
         """

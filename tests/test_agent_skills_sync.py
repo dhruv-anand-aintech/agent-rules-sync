@@ -230,3 +230,27 @@ def test_framework_paths_use_home():
     assert ".codex" in str(sync.frameworks["codex"]["path"]) or "skills" in str(
         sync.frameworks["codex"]["path"]
     )
+    assert "antigravity-cli" in str(sync.frameworks["antigravity-cli"]["path"])
+
+
+def test_sync_creates_antigravity_cli_plugin(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: home)
+
+    cfg = tmp_path / "config"
+    sync = AgentSkillsSync(config_dir=cfg)
+    sync.frameworks = {
+        "antigravity-cli": {
+            "name": "Antigravity CLI",
+            "path": home / ".gemini" / "antigravity-cli" / "plugins" / "agent-rules-sync" / "skills",
+            "description": "",
+        },
+    }
+    _create_skill(sync.master_skills_dir, "cli-skill")
+
+    sync.sync(backup_before_write=False, direction="push")
+
+    plugin_dir = home / ".gemini" / "antigravity-cli" / "plugins" / "agent-rules-sync"
+    assert (plugin_dir / "plugin.json").exists()
+    assert (plugin_dir / "skills" / "cli-skill" / "SKILL.md").exists()

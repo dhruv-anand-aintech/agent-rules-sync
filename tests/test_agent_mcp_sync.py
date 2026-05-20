@@ -161,3 +161,18 @@ def test_mcp_sync_opencode_preserves_top_level_keys(mcp_syncer, temp_home):
     assert opencode_data["agent"] == {"general": {"model": "claude"}}
     assert "s1" in opencode_data["mcp"]
     assert opencode_data["mcp"]["s1"]["type"] == "stdio"
+
+
+def test_mcp_sync_antigravity_cli_plugin(mcp_syncer, temp_home):
+    claude_code_path = temp_home / ".claude.json"
+    claude_code_path.write_text(json.dumps({
+        "mcpServers": {"s1": {"command": "c1"}}
+    }))
+
+    mcp_syncer.sync(direction="bidirectional")
+
+    plugin_dir = temp_home / ".gemini" / "antigravity-cli" / "plugins" / "agent-rules-sync"
+    assert (plugin_dir / "plugin.json").exists()
+
+    mcp_data = json.loads((plugin_dir / "mcp_config.json").read_text())
+    assert "s1" in mcp_data["mcpServers"]

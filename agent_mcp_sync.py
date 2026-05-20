@@ -6,6 +6,7 @@ Targets:
 - Claude Code: ~/.claude.json
 - Cursor: ~/.cursor/mcp.json
 - Gemini CLI: ~/.gemini/mcp.json
+- Antigravity CLI: ~/.gemini/antigravity-cli/plugins/agent-rules-sync/mcp_config.json
 - OpenCode: ~/.config/opencode/opencode.json
 - Claude Desktop: ~/Library/Application Support/Claude/claude_desktop_config.json (macOS)
                  ~/.config/Claude/claude_desktop_config.json (Linux)
@@ -24,6 +25,8 @@ import shutil
 from datetime import datetime
 import re
 import toml
+
+from agent_antigravity_cli import ensure_plugin as ensure_antigravity_cli_plugin
 
 class AgentMcpSync:
     """Manages synchronization of MCP server configurations."""
@@ -47,6 +50,10 @@ class AgentMcpSync:
             "gemini": {
                 "name": "Gemini CLI",
                 "path": Path.home() / ".gemini" / "mcp.json",
+            },
+            "antigravity-cli": {
+                "name": "Antigravity CLI",
+                "path": Path.home() / ".gemini" / "antigravity-cli" / "plugins" / "agent-rules-sync" / "mcp_config.json",
             },
             "claude-desktop": {
                 "name": "Claude Desktop",
@@ -291,6 +298,8 @@ class AgentMcpSync:
         if direction in ("bidirectional", "push"):
             for label, info in self.global_sources.items():
                 path = info["path"]
+                if label == "antigravity-cli":
+                    ensure_antigravity_cli_plugin()
                 self._update_target(path, all_servers, label, log, info)
 
             for repo in self.repo_paths:

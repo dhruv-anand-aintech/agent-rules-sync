@@ -4,13 +4,15 @@ Agent Skills Sync - Synchronize skills across AI coding assistants
 
 Skills are directory-based: each skill is a folder containing SKILL.md and
 optional assets (scripts, references, etc.). This module syncs user-level
-skills across Cursor, Claude Code, Codex, Gemini Antigravity, OpenCode, and
+skills across Cursor, Claude Code, Codex, Antigravity CLI, Gemini Antigravity,
+OpenCode, and
 the shared ~/.agents/skills path.
 
 Storage locations by framework:
 - Cursor: ~/.cursor/skills/, ~/.cursor/skills-cursor/
 - Claude Code: ~/.claude/skills/
 - Codex: ~/.codex/skills/ (or $CODEX_HOME/skills)
+- Antigravity CLI: ~/.gemini/antigravity-cli/plugins/agent-rules-sync/skills/
 - Gemini Antigravity: ~/.gemini/antigravity/skills/
 - OpenCode: ~/.config/opencode/skills/
 - Shared (Codex, OpenCode, Claude-compatible): ~/.agents/skills/
@@ -24,6 +26,8 @@ import os
 import shutil
 from datetime import datetime
 from pathlib import Path
+
+from agent_antigravity_cli import ensure_plugin as ensure_antigravity_cli_plugin
 
 
 class AgentSkillsSync:
@@ -73,6 +77,11 @@ class AgentSkillsSync:
                 "name": "Shared Agents",
                 "path": Path.home() / ".agents" / "skills",
                 "description": "Shared ~/.agents/skills (Codex, OpenCode, Claude)",
+            },
+            "antigravity-cli": {
+                "name": "Antigravity CLI",
+                "path": Path.home() / ".gemini" / "antigravity-cli" / "plugins" / "agent-rules-sync" / "skills",
+                "description": "Antigravity CLI plugin skills",
             },
             "gemini-antigravity": {
                 "name": "Gemini Antigravity",
@@ -299,6 +308,8 @@ class AgentSkillsSync:
 
             # Propagate master → all frameworks
             for fw_id, fw in self.frameworks.items():
+                if fw_id == "antigravity-cli":
+                    ensure_antigravity_cli_plugin()
                 dst = fw["path"] / skill_name
                 if dst.exists() and backup_before_write:
                     self._backup_skill_dir(dst, fw_id)
