@@ -1,0 +1,20 @@
+{
+  "name": "agent-rules-sync-local",
+  "interface": {
+    "displayName": "Agent Rules Sync Local"
+  },
+  "plugins": [
+    {
+      "name": "terminal-selector",
+      "source": {
+        "source": "local",
+        "path": "./plugins/terminal-selector"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

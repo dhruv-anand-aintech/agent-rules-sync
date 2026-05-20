@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "terminal-selector": {
+      "command": "python3",
+      "args": [
+        "./terminal_selector/mcp_server.py"
+      ],
+      "cwd": "."
+    }
+  }
+}

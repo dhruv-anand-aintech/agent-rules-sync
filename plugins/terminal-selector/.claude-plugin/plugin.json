@@ -1,0 +1,12 @@
+{
+  "name": "terminal-selector",
+  "version": "0.1.0",
+  "description": "Terminal-native single, multi, and ranked selection tools for coding agents.",
+  "author": {
+    "name": "Dhruv Anand"
+  },
+  "homepage": "https://github.com/dhruv-anand-aintech/agent-rules-sync",
+  "repository": "https://github.com/dhruv-anand-aintech/agent-rules-sync",
+  "license": "MIT",
+  "skills": "./skills/"
+}

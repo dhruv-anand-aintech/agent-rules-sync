@@ -1,0 +1,14 @@
+{
+  "name": "agent-rules-sync-local",
+  "description": "Public plugin marketplace for agent-rules-sync utilities.",
+  "owner": {
+    "name": "Dhruv Anand"
+  },
+  "plugins": [
+    {
+      "name": "terminal-selector",
+      "source": "./plugins/terminal-selector",
+      "description": "Terminal-native single, multi, and ranked selection tools for coding agents."
+    }
+  ]
+}
