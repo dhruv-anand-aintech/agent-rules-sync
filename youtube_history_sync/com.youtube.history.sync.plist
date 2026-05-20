@@ -9,7 +9,7 @@
         <!-- Replace with the absolute path to your Python interpreter (e.g., from your uv or miniforge env) -->
         <string>/Users/dhruvanand/miniforge3/bin/python3</string>
         <!-- Replace with the absolute path to the script you want to run -->
-        <string>/Users/dhruvanand/Code/agent-rules-sync-standalone/youtube_history_sync/chrome_history.py</string>
+        <string>/Users/dhruvanand/Code/agent-rules-sync-standalone/youtube_history_sync/browser_history.py</string>
     </array>
     <key>StartCalendarInterval</key>
     <dict>

@@ -8,13 +8,13 @@ Choose one of the three methods below. All methods output history to a single co
 
 ---
 
-### Method 1: Local Chrome Canary SQLite Reader (Recommended, Fully Local & Automated)
-Extracts history from your Chrome Canary SQLite database. It includes entries synced from other devices if Chrome Sync is enabled on your account.
+### Method 1: Multi-Browser SQLite Reader (Recommended, Fully Local & Automated)
+Extracts history from local databases of all installed browsers (Chrome, Chrome Canary, Edge, Edge Dev, Arc, Brave, Firefox, Safari). It includes entries synced from other devices if browser history sync is active.
 
 **Prerequisites:** None (uses built-in Python libraries).
 **Run once:**
 ```bash
-python3 youtube_history_sync/chrome_history.py
+python3 youtube_history_sync/browser_history.py
 ```
 
 ---
@@ -59,7 +59,7 @@ To run **Method 1** or **Method 2** automatically every night at 11:30 PM, use m
    ```
 2. Open `~/Library/LaunchAgents/com.youtube.history.sync.plist` in an editor and check:
    - Ensure the Python path (`/Users/dhruvanand/miniforge3/bin/python3`) is correct.
-   - Update the script path (`/Users/dhruvanand/Code/agent-rules-sync-standalone/youtube_history_sync/chrome_history.py` or `ytdlp_history.py`) to match where your repo is located.
+   - Update the script path (`/Users/dhruvanand/Code/agent-rules-sync-standalone/youtube_history_sync/browser_history.py` or `ytdlp_history.py`) to match where your repo is located.
 3. Load the agent to activate it:
    ```bash
    launchctl load ~/Library/LaunchAgents/com.youtube.history.sync.plist
