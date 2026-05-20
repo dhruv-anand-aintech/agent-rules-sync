@@ -116,9 +116,30 @@ class AgentSkillsSync:
         except Exception:
             pass
 
+    def _has_valid_skill_frontmatter(self, skill_md):
+        """Return True when SKILL.md starts with a non-empty YAML frontmatter block."""
+        if not skill_md.is_file():
+            return False
+        try:
+            lines = skill_md.read_text(encoding="utf-8").splitlines()
+        except UnicodeDecodeError:
+            return False
+        if len(lines) < 3 or lines[0].strip() != "---":
+            return False
+        try:
+            closing_index = next(
+                i for i, line in enumerate(lines[1:], start=1) if line.strip() == "---"
+            )
+        except StopIteration:
+            return False
+        frontmatter = [line.strip() for line in lines[1:closing_index]]
+        return any(line.startswith("name:") for line in frontmatter) and any(
+            line.startswith("description:") for line in frontmatter
+        )
+
     def _is_valid_skill_dir(self, path):
-        """Return True if path is a skill directory (contains SKILL.md)."""
-        return path.is_dir() and (path / self.SKILL_MD).exists()
+        """Return True if path is a skill directory with valid SKILL.md metadata."""
+        return path.is_dir() and self._has_valid_skill_frontmatter(path / self.SKILL_MD)
 
     def _list_skills_in_dir(self, base_path):
         """List valid skill names in a directory."""
@@ -203,20 +224,29 @@ class AgentSkillsSync:
     def _copy_skill(self, src, dst, log_callback=None):
         """
         Copy skill directory from src to dst.
-        Removes existing dst/skill_name if present, then copies.
+        Stage the copy beside the destination, then replace the old directory.
+        This avoids deleting a valid skill when the copy fails, for example
+        because the disk is full.
         """
         if src == dst:
             return True
+        tmp_dst = dst.parent / f".{dst.name}.tmp-sync"
         try:
             dst.parent.mkdir(parents=True, exist_ok=True)
+            if tmp_dst.exists() or tmp_dst.is_symlink():
+                if not self._remove_existing_path(tmp_dst):
+                    raise OSError(f"Could not remove temporary destination: {tmp_dst}")
+            shutil.copytree(src, tmp_dst, symlinks=True)
             if dst.exists() or dst.is_symlink():
                 if not self._remove_existing_path(dst):
                     raise OSError(f"Could not remove existing destination: {dst}")
-            shutil.copytree(src, dst, symlinks=True)
+            tmp_dst.replace(dst)
             if log_callback:
                 log_callback(f"Copied {src.name} -> {dst}")
             return True
         except Exception as e:
+            if tmp_dst.exists() or tmp_dst.is_symlink():
+                self._remove_existing_path(tmp_dst)
             if log_callback:
                 log_callback(f"Error copying {src.name}: {e}")
             return False

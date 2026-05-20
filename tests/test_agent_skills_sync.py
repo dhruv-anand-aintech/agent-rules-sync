@@ -47,6 +47,70 @@ def test_is_valid_skill_dir():
         assert sync._is_valid_skill_dir(invalid_dir) is False
 
 
+def test_is_valid_skill_dir_rejects_missing_frontmatter():
+    """Reject empty or metadata-free SKILL.md files as sync sources."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        empty = base / "empty"
+        empty.mkdir()
+        (empty / "SKILL.md").write_text("")
+        no_frontmatter = base / "no-frontmatter"
+        no_frontmatter.mkdir()
+        (no_frontmatter / "SKILL.md").write_text("# No metadata\n")
+
+        sync = AgentSkillsSync(config_dir=base / "config")
+        assert sync._is_valid_skill_dir(empty) is False
+        assert sync._is_valid_skill_dir(no_frontmatter) is False
+
+
+def test_sync_does_not_promote_newer_invalid_skill_over_valid_source():
+    """A newer zero-byte SKILL.md must not overwrite a valid installed skill."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = Path(tmpdir) / "config"
+        cfg.mkdir()
+        cursor_skills = cfg / "cursor" / "skills"
+        codex_skills = cfg / "codex" / "skills"
+        cursor_skills.mkdir(parents=True)
+        codex_skills.mkdir(parents=True)
+
+        sync = AgentSkillsSync(config_dir=cfg)
+        sync.frameworks = {
+            "cursor": {"name": "Cursor", "path": cursor_skills, "description": ""},
+            "codex": {"name": "Codex", "path": codex_skills, "description": ""},
+        }
+        sync.master_skills_dir = cfg / "skills"
+        sync.master_skills_dir.mkdir(exist_ok=True)
+
+        _create_skill(cursor_skills, "shared-skill", "Valid source")
+        invalid = codex_skills / "shared-skill"
+        invalid.mkdir(parents=True)
+        (invalid / "SKILL.md").write_text("")
+
+        sync.sync(backup_before_write=False)
+
+        synced = (codex_skills / "shared-skill" / "SKILL.md").read_text()
+        assert "name: shared-skill" in synced
+        assert "Valid source" in synced
+
+
+def test_copy_skill_preserves_existing_destination_when_copy_fails(monkeypatch):
+    """A failed copy should leave the previous destination skill intact."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        src = _create_skill(base / "src", "stable-skill", "New content")
+        dst = _create_skill(base / "dst", "stable-skill", "Old content")
+
+        sync = AgentSkillsSync(config_dir=base / "config")
+
+        def fail_copytree(*args, **kwargs):
+            raise OSError("copy failed")
+
+        monkeypatch.setattr("agent_skills_sync.shutil.copytree", fail_copytree)
+
+        assert sync._copy_skill(src, dst) is False
+        assert "Old content" in (dst / "SKILL.md").read_text()
+
+
 def test_sync_propagates_skill_from_one_framework():
     """Skill in one framework propagates to all others."""
     with tempfile.TemporaryDirectory() as tmpdir:
