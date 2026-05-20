@@ -64,6 +64,14 @@ class AgentHistorySync:
             / "globalStorage"
             / "state.vscdb"
         )
+        self.cursor_workspace_dir = (
+            self.home
+            / "Library"
+            / "Application Support"
+            / "Cursor"
+            / "User"
+            / "workspaceStorage"
+        )
         self._cursor_bubble_timestamp_cache: dict[str, list[int]] = {}
         self.hostname = f"{socket.gethostname()}:{os.environ.get('USER', 'agent')}"
 
@@ -113,7 +121,12 @@ class AgentHistorySync:
 
         yield from self._iter_codex()
         yield from self._iter_claude()
+        yield from self._iter_cursor_ide()
         yield from self._iter_cursor_cli()
+        yield from self._iter_gemini()
+        yield from self._iter_opencode()
+        yield from self._iter_hermes()
+        yield from self._iter_openclaw()
 
     def get_watch_paths_and_hashes(self) -> dict[Path, str | None]:
         return {path: self._path_signature(path) for path in self.transcript_paths()}
@@ -135,6 +148,10 @@ class AgentHistorySync:
             self.home / ".codex" / "sessions",
             self.home / ".claude" / "projects",
             self.home / ".cursor" / "projects",
+            self.home / ".gemini" / "tmp",
+            self.home / ".local" / "share" / "opencode",
+            self.home / ".hermes",
+            self.home / ".openclaw" / "agents",
         ]
         return [root for root in roots if root.exists()]
 
@@ -144,8 +161,16 @@ class AgentHistorySync:
             (self.home / ".codex" / "sessions", "*.jsonl"),
             (self.home / ".claude" / "projects", "*.jsonl"),
             (self.home / ".cursor" / "projects", "*.jsonl"),
+            (self.home / ".gemini" / "tmp", "*.jsonl"),
+            (self.home / ".openclaw" / "agents", "*.jsonl"),
         ]:
             paths.extend(self._recent_files(root, pattern))
+        for path in [
+            self.home / ".local" / "share" / "opencode" / "opencode.db",
+            self.home / ".hermes" / "state.db",
+        ]:
+            if path.exists():
+                paths.append(path)
         return sorted(set(paths), key=lambda p: str(p))
 
     def _iter_path(self, path: Path) -> Iterator[AgentCommand]:
@@ -156,6 +181,14 @@ class AgentHistorySync:
             yield from self._iter_claude_file(path)
         elif ".cursor" in parts and "projects" in parts:
             yield from self._iter_cursor_cli_file(path)
+        elif ".gemini" in parts and "tmp" in parts:
+            yield from self._iter_gemini_file(path)
+        elif path.name == "opencode.db" and "opencode" in parts:
+            yield from self._iter_opencode_file(path)
+        elif path.name == "state.db" and ".hermes" in parts:
+            yield from self._iter_hermes_file(path)
+        elif ".openclaw" in parts and "agents" in parts:
+            yield from self._iter_openclaw_file(path)
 
     def _load_state(self) -> dict:
         if not self.state_file.exists():
@@ -319,7 +352,7 @@ class AgentHistorySync:
             if "exec_command" not in name and name not in {"shell", "bash"}:
                 continue
 
-            parsed = self._parse_jsonish(payload.get("input"))
+            parsed = self._parse_jsonish(payload.get("input") or payload.get("arguments"))
             command = parsed.get("cmd") or parsed.get("command")
             if not command:
                 continue
@@ -413,6 +446,324 @@ class AgentHistorySync:
                     timestamp_ns=ts + offset,
                     command=command,
                     cwd=str(obj.get("cwd") or obj.get("workdir") or cwd),
+                )
+                offset += 1
+
+    def _iter_cursor_ide(self) -> Iterator[AgentCommand]:
+        if not self.cursor_state_db.exists():
+            return
+        workspace_map = self._cursor_composer_workspace_map()
+        try:
+            conn = sqlite3.connect(str(self.cursor_state_db))
+            conn.row_factory = sqlite3.Row
+            try:
+                rows = conn.execute(
+                    """
+                    select
+                        substr(key, 10, 36) as composer_id,
+                        json_extract(value, '$.bubbleId') as bubble_id,
+                        json_extract(value, '$.toolFormerData.name') as tool_name,
+                        json_extract(value, '$.toolFormerData.rawArgs') as raw_args,
+                        coalesce(json_extract(value, '$.createdAt'), json_extract(value, '$.timestamp')) as timestamp
+                    from cursorDiskKV
+                    where key like 'bubbleId:%'
+                      and json_extract(value, '$.toolFormerData.name') in ('run_terminal_command_v2', 'run_terminal_cmd')
+                    order by key
+                    """
+                ).fetchall()
+            finally:
+                conn.close()
+        except Exception:
+            return
+
+        session_offsets: dict[str, int] = {}
+        composer_times = self._cursor_composer_times()
+        for row in rows:
+            parsed = self._parse_jsonish(row["raw_args"])
+            command = parsed.get("command") or parsed.get("cmd")
+            if not command:
+                continue
+            session = str(row["composer_id"])
+            offset = session_offsets.get(session, 0)
+            session_offsets[session] = offset + 1
+            ts = self._timestamp_ns_or_none(row["timestamp"])
+            if ts is None:
+                created, updated = composer_times.get(session, (None, None))
+                ts = updated or created or self._file_timestamp_ns(self.cursor_state_db)
+            yield AgentCommand(
+                source=str(self.cursor_state_db),
+                platform="cursor",
+                session=session,
+                timestamp_ns=ts + offset,
+                command=str(command),
+                cwd=str(parsed.get("workdir") or parsed.get("cwd") or workspace_map.get(session) or self.home),
+                intent=str(row["tool_name"] or "terminal"),
+            )
+
+    def _cursor_composer_times(self) -> dict[str, tuple[int | None, int | None]]:
+        if not self.cursor_state_db.exists():
+            return {}
+        try:
+            conn = sqlite3.connect(str(self.cursor_state_db))
+            try:
+                rows = conn.execute(
+                    """
+                    select
+                        substr(key, 14) as composer_id,
+                        json_extract(value, '$.createdAt') as created_at,
+                        json_extract(value, '$.lastUpdatedAt') as updated_at
+                    from cursorDiskKV
+                    where key like 'composerData:%'
+                    """
+                ).fetchall()
+            finally:
+                conn.close()
+        except Exception:
+            return {}
+        return {
+            str(row[0]): (
+                self._timestamp_ns_or_none(row[1]),
+                self._timestamp_ns_or_none(row[2]),
+            )
+            for row in rows
+            if row and row[0]
+        }
+
+    def _cursor_composer_workspace_map(self) -> dict[str, str]:
+        out: dict[str, str] = {}
+        if not self.cursor_workspace_dir.exists():
+            return out
+        for ws_dir in self.cursor_workspace_dir.iterdir():
+            if not ws_dir.is_dir():
+                continue
+            workspace = ""
+            try:
+                data = json.loads((ws_dir / "workspace.json").read_text(encoding="utf-8"))
+                workspace = str(data.get("folder") or "").replace("file://", "")
+            except Exception:
+                workspace = ""
+            if not workspace:
+                continue
+            db = ws_dir / "state.vscdb"
+            if not db.exists():
+                continue
+            try:
+                conn = sqlite3.connect(str(db))
+                try:
+                    row = conn.execute(
+                        "select value from ItemTable where key='composer.composerData' limit 1"
+                    ).fetchone()
+                finally:
+                    conn.close()
+                if not row:
+                    continue
+                data = json.loads(row[0])
+                for composer in data.get("allComposers") or []:
+                    composer_id = composer.get("composerId") if isinstance(composer, dict) else None
+                    if composer_id:
+                        out[str(composer_id)] = workspace
+            except Exception:
+                continue
+        return out
+
+    def _iter_gemini(self) -> Iterator[AgentCommand]:
+        root = self.home / ".gemini" / "tmp"
+        if not root.exists():
+            return
+        for path in self._recent_files(root, "*.jsonl"):
+            yield from self._iter_gemini_file(path)
+
+    def _iter_gemini_file(self, path: Path) -> Iterator[AgentCommand]:
+        session = path.stem
+        cwd = self._cwd_from_gemini_path(path)
+        for line in self._read_lines(path):
+            try:
+                event = json.loads(line)
+            except Exception:
+                continue
+            if event.get("sessionId"):
+                session = str(event.get("sessionId") or session)
+                continue
+            ts = self._timestamp_ns(event.get("timestamp"))
+            offset = 0
+            for call in event.get("toolCalls") or []:
+                if not isinstance(call, dict):
+                    continue
+                name = str(call.get("name") or "")
+                if name != "run_shell_command":
+                    continue
+                args = call.get("args") or {}
+                command = args.get("command") if isinstance(args, dict) else None
+                if not command:
+                    continue
+                yield AgentCommand(
+                    source=str(path),
+                    platform="gemini",
+                    session=session,
+                    timestamp_ns=ts + offset,
+                    command=str(command),
+                    cwd=str(args.get("workdir") or args.get("cwd") or cwd),
+                    intent=args.get("description") or name,
+                )
+                offset += 1
+
+    def _iter_opencode(self) -> Iterator[AgentCommand]:
+        path = self.home / ".local" / "share" / "opencode" / "opencode.db"
+        if path.exists():
+            yield from self._iter_opencode_file(path)
+
+    def _iter_opencode_file(self, path: Path) -> Iterator[AgentCommand]:
+        try:
+            conn = sqlite3.connect(str(path))
+            conn.row_factory = sqlite3.Row
+            try:
+                rows = conn.execute(
+                    """
+                    select p.id, p.session_id, p.time_created, p.data, s.directory
+                    from part p
+                    left join session s on s.id = p.session_id
+                    where p.data like '%"tool":"bash"%'
+                       or p.data like '%"tool": "bash"%'
+                    order by p.time_created, p.id
+                    """
+                ).fetchall()
+            finally:
+                conn.close()
+        except Exception:
+            return
+
+        for row in rows:
+            try:
+                data = json.loads(row["data"])
+            except Exception:
+                continue
+            if data.get("type") != "tool" or data.get("tool") != "bash":
+                continue
+            state = data.get("state") or {}
+            input_data = state.get("input") or {}
+            command = input_data.get("command") or input_data.get("cmd")
+            if not command:
+                continue
+            time_data = state.get("time") or {}
+            ts = self._timestamp_ns_or_none(time_data.get("start"))
+            if ts is None:
+                ts = self._timestamp_ns(row["time_created"])
+            start = self._timestamp_ns_or_none(time_data.get("start"))
+            end = self._timestamp_ns_or_none(time_data.get("end"))
+            duration_ns = end - start if start is not None and end is not None and end >= start else -1
+            metadata = state.get("metadata") or {}
+            exit_code = metadata.get("exit")
+            yield AgentCommand(
+                source=str(path),
+                platform="opencode",
+                session=str(row["session_id"]),
+                timestamp_ns=ts,
+                command=str(command),
+                cwd=str(input_data.get("workdir") or input_data.get("cwd") or row["directory"] or self.home),
+                exit_code=int(exit_code if exit_code is not None else -1),
+                duration_ns=duration_ns,
+                intent=input_data.get("description") or state.get("title"),
+            )
+
+    def _iter_hermes(self) -> Iterator[AgentCommand]:
+        path = self.home / ".hermes" / "state.db"
+        if path.exists():
+            yield from self._iter_hermes_file(path)
+
+    def _iter_hermes_file(self, path: Path) -> Iterator[AgentCommand]:
+        try:
+            conn = sqlite3.connect(str(path))
+            conn.row_factory = sqlite3.Row
+            try:
+                rows = conn.execute(
+                    """
+                    select m.id, m.session_id, m.timestamp, m.tool_calls, s.source
+                    from messages m
+                    left join sessions s on s.id = m.session_id
+                    where m.tool_calls is not null and m.tool_calls != ''
+                    order by m.timestamp, m.id
+                    """
+                ).fetchall()
+            finally:
+                conn.close()
+        except Exception:
+            return
+
+        for row in rows:
+            try:
+                calls = json.loads(row["tool_calls"])
+            except Exception:
+                continue
+            if not isinstance(calls, list):
+                continue
+            offset = 0
+            for call in calls:
+                if not isinstance(call, dict):
+                    continue
+                function = call.get("function") or {}
+                name = str(function.get("name") or call.get("name") or "")
+                if name not in {"terminal", "bash", "shell", "exec"}:
+                    continue
+                parsed = self._parse_jsonish(function.get("arguments") or call.get("arguments"))
+                command = parsed.get("command") or parsed.get("cmd")
+                if not command:
+                    continue
+                yield AgentCommand(
+                    source=str(path),
+                    platform="hermes",
+                    session=str(row["session_id"]),
+                    timestamp_ns=self._timestamp_ns(row["timestamp"]) + offset,
+                    command=str(command),
+                    cwd=str(parsed.get("workdir") or parsed.get("cwd") or self.home),
+                    intent=name,
+                )
+                offset += 1
+
+    def _iter_openclaw(self) -> Iterator[AgentCommand]:
+        root = self.home / ".openclaw" / "agents"
+        if not root.exists():
+            return
+        for path in self._recent_files(root, "*.jsonl"):
+            yield from self._iter_openclaw_file(path)
+
+    def _iter_openclaw_file(self, path: Path) -> Iterator[AgentCommand]:
+        session = path.stem
+        cwd = str(self.home)
+        agent_name = path.parts[-3] if len(path.parts) >= 3 else "main"
+        for line in self._read_lines(path):
+            try:
+                event = json.loads(line)
+            except Exception:
+                continue
+            if event.get("type") == "session":
+                session = str(event.get("id") or session)
+                cwd = str(event.get("cwd") or cwd)
+                continue
+            if event.get("type") != "message":
+                continue
+            msg = event.get("message") or {}
+            if msg.get("role") != "assistant":
+                continue
+            ts = self._timestamp_ns(event.get("timestamp") or msg.get("timestamp"))
+            offset = 0
+            for block in msg.get("content") or []:
+                if not isinstance(block, dict) or block.get("type") != "toolCall":
+                    continue
+                name = str(block.get("name") or "")
+                if name not in {"exec", "terminal", "bash", "shell"}:
+                    continue
+                args = block.get("arguments") or {}
+                command = args.get("command") or args.get("cmd") if isinstance(args, dict) else None
+                if not command:
+                    continue
+                yield AgentCommand(
+                    source=str(path),
+                    platform="openclaw",
+                    session=session,
+                    timestamp_ns=ts + offset,
+                    command=str(command),
+                    cwd=str(args.get("workdir") or args.get("cwd") or cwd),
+                    intent=f"{agent_name}:{name}",
                 )
                 offset += 1
 
@@ -584,6 +935,24 @@ class AgentHistorySync:
         except Exception:
             pass
         return str(Path.home())
+
+    def _cwd_from_gemini_path(self, path: Path) -> str:
+        parts = path.parts
+        try:
+            idx = parts.index("tmp")
+            slug = parts[idx + 1]
+        except Exception:
+            return str(self.home)
+
+        projects_json = self.home / ".gemini" / "projects.json"
+        try:
+            data = json.loads(projects_json.read_text(encoding="utf-8"))
+            for abs_path, mapped_slug in (data.get("projects") or {}).items():
+                if mapped_slug == slug:
+                    return str(abs_path)
+        except Exception:
+            pass
+        return str(self.home / slug.replace("-", "/"))
 
 
 def ensure_atuin_zsh(log_callback=None) -> bool:

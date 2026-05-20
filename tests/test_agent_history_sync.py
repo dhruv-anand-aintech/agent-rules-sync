@@ -124,6 +124,47 @@ def test_extracts_codex_exec_command(tmp_path):
     assert commands[0].cwd == "/repo/sub"
 
 
+def test_extracts_codex_function_call_arguments(tmp_path):
+    home = tmp_path
+    session_dir = home / ".codex" / "sessions" / "2026" / "05" / "21"
+    session_dir.mkdir(parents=True)
+    transcript = session_dir / "rollout-test.jsonl"
+    transcript.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "timestamp": "2026-05-21T00:00:00Z",
+                        "type": "session_meta",
+                        "payload": {"id": "sid", "cwd": "/repo"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-05-21T00:00:01Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call",
+                            "name": "exec_command",
+                            "arguments": json.dumps({"cmd": "git status", "workdir": "/repo"}),
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n"
+    )
+
+    sync = AgentHistorySync(config_dir=home / ".config" / "agent-rules-sync")
+    sync.home = home
+
+    commands = list(sync._iter_codex_file(transcript))
+
+    assert len(commands) == 1
+    assert commands[0].platform == "codex"
+    assert commands[0].command == "git status"
+
+
 def test_extracts_cursor_command_timestamp_from_bubble_metadata(tmp_path):
     home = tmp_path
     session_id = "1a0a5012-7b28-4181-bfff-461c37ebb4b1"
@@ -205,6 +246,211 @@ def test_extracts_cursor_command_timestamp_from_bubble_metadata(tmp_path):
     assert commands[0].platform == "cursor"
     assert commands[0].command == "ls -la"
     assert commands[0].timestamp_ns == 1777884646064000000
+
+
+def test_extracts_cursor_ide_terminal_bubbles(tmp_path):
+    home = tmp_path
+    cursor_db = home / "state.vscdb"
+    conn = sqlite3.connect(str(cursor_db))
+    conn.execute("create table cursorDiskKV (key text primary key, value text)")
+    conn.execute(
+        "insert into cursorDiskKV(key, value) values(?, ?)",
+        (
+            "composerData:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            json.dumps({"createdAt": "2026-05-01T00:00:00Z", "lastUpdatedAt": "2026-05-01T00:00:02Z"}),
+        ),
+    )
+    conn.execute(
+        "insert into cursorDiskKV(key, value) values(?, ?)",
+        (
+            "bubbleId:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            json.dumps(
+                {
+                    "bubbleId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                    "toolFormerData": {
+                        "name": "run_terminal_command_v2",
+                        "rawArgs": json.dumps({"command": "npm test", "workdir": "/repo"}),
+                    },
+                    "createdAt": "2026-05-01T00:00:01Z",
+                }
+            ),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    sync = AgentHistorySync(config_dir=home / ".config" / "agent-rules-sync")
+    sync.home = home
+    sync.cursor_state_db = cursor_db
+    sync.cursor_workspace_dir = home / "workspaceStorage"
+
+    commands = list(sync._iter_cursor_ide())
+
+    assert len(commands) == 1
+    assert commands[0].platform == "cursor"
+    assert commands[0].session == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    assert commands[0].command == "npm test"
+    assert commands[0].cwd == "/repo"
+
+
+def test_extracts_gemini_shell_commands(tmp_path):
+    home = tmp_path
+    transcript = home / ".gemini" / "tmp" / "demo" / "chats" / "session-demo.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text(
+        "\n".join(
+            [
+                json.dumps({"sessionId": "g1", "startTime": "2026-05-01T00:00:00Z"}),
+                json.dumps(
+                    {
+                        "timestamp": "2026-05-01T00:00:01Z",
+                        "type": "gemini",
+                        "toolCalls": [
+                            {
+                                "name": "run_shell_command",
+                                "args": {"command": "pytest", "description": "run tests"},
+                            }
+                        ],
+                    }
+                ),
+            ]
+        )
+        + "\n"
+    )
+
+    sync = AgentHistorySync(config_dir=home / ".config" / "agent-rules-sync")
+    sync.home = home
+
+    commands = list(sync._iter_gemini_file(transcript))
+
+    assert len(commands) == 1
+    assert commands[0].platform == "gemini"
+    assert commands[0].session == "g1"
+    assert commands[0].command == "pytest"
+
+
+def test_extracts_opencode_bash_parts(tmp_path):
+    home = tmp_path
+    db = home / ".local" / "share" / "opencode" / "opencode.db"
+    db.parent.mkdir(parents=True)
+    conn = sqlite3.connect(str(db))
+    conn.execute("create table session (id text primary key, directory text)")
+    conn.execute("create table part (id text primary key, session_id text, time_created integer, data text)")
+    conn.execute("insert into session(id, directory) values('ses1', '/repo')")
+    conn.execute(
+        "insert into part(id, session_id, time_created, data) values(?, ?, ?, ?)",
+        (
+            "part1",
+            "ses1",
+            1777064471295,
+            json.dumps(
+                {
+                    "type": "tool",
+                    "tool": "bash",
+                    "state": {
+                        "input": {"command": "npm test", "description": "run tests"},
+                        "metadata": {"exit": 0},
+                        "time": {"start": 1777064471295, "end": 1777064472295},
+                    },
+                }
+            ),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    sync = AgentHistorySync(config_dir=home / ".config" / "agent-rules-sync")
+    sync.home = home
+
+    commands = list(sync._iter_opencode_file(db))
+
+    assert len(commands) == 1
+    assert commands[0].platform == "opencode"
+    assert commands[0].command == "npm test"
+    assert commands[0].cwd == "/repo"
+    assert commands[0].exit_code == 0
+
+
+def test_extracts_hermes_terminal_tool_calls(tmp_path):
+    home = tmp_path
+    db = home / ".hermes" / "state.db"
+    db.parent.mkdir(parents=True)
+    conn = sqlite3.connect(str(db))
+    conn.execute("create table sessions (id text primary key, source text)")
+    conn.execute(
+        "create table messages (id integer primary key, session_id text, timestamp real, tool_calls text)"
+    )
+    conn.execute("insert into sessions(id, source) values('s1', 'cli')")
+    conn.execute(
+        "insert into messages(id, session_id, timestamp, tool_calls) values(?, ?, ?, ?)",
+        (
+            1,
+            "s1",
+            1775135063.75558,
+            json.dumps(
+                [
+                    {
+                        "function": {
+                            "name": "terminal",
+                            "arguments": json.dumps({"command": "ps aux", "workdir": "/tmp"}),
+                        }
+                    }
+                ]
+            ),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    sync = AgentHistorySync(config_dir=home / ".config" / "agent-rules-sync")
+    sync.home = home
+
+    commands = list(sync._iter_hermes_file(db))
+
+    assert len(commands) == 1
+    assert commands[0].platform == "hermes"
+    assert commands[0].command == "ps aux"
+    assert commands[0].cwd == "/tmp"
+
+
+def test_extracts_openclaw_exec_tool_calls(tmp_path):
+    home = tmp_path
+    transcript = home / ".openclaw" / "agents" / "main" / "sessions" / "s1.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text(
+        "\n".join(
+            [
+                json.dumps({"type": "session", "id": "s1", "cwd": "/repo"}),
+                json.dumps(
+                    {
+                        "type": "message",
+                        "timestamp": "2026-05-01T00:00:01Z",
+                        "message": {
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "type": "toolCall",
+                                    "name": "exec",
+                                    "arguments": {"command": "openclaw status", "workdir": "/repo"},
+                                }
+                            ],
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n"
+    )
+
+    sync = AgentHistorySync(config_dir=home / ".config" / "agent-rules-sync")
+    sync.home = home
+
+    commands = list(sync._iter_openclaw_file(transcript))
+
+    assert len(commands) == 1
+    assert commands[0].platform == "openclaw"
+    assert commands[0].command == "openclaw status"
+    assert commands[0].cwd == "/repo"
 
 
 def test_sync_can_import_only_changed_transcript_paths(tmp_path):
