@@ -64,6 +64,7 @@ class AgentMcpSync:
                 "path": Path.home() / ".config" / "opencode" / "opencode.json",
                 "mcp_key": "mcp",
                 "from_internal": self._to_opencode_format,
+                "from_file": self._from_opencode_file,
             },
             "codex": {
                 "name": "Codex",
@@ -101,16 +102,46 @@ class AgentMcpSync:
             pass
 
     def _to_opencode_format(self, servers: dict) -> dict:
-        """Convert internal format to OpenCode's mcp format (adds type field)."""
+        """Convert internal format to OpenCode's mcp format."""
         result = {}
         for name, cfg in servers.items():
             new_cfg = dict(cfg)
             if "url" in new_cfg:
                 new_cfg["type"] = "remote"
+                new_cfg["enabled"] = new_cfg.get("enabled", True)
             elif "command" in new_cfg:
-                new_cfg["type"] = "stdio"
+                command = new_cfg.get("command")
+                args = new_cfg.pop("args", [])
+                if isinstance(command, list):
+                    new_cfg["command"] = command
+                elif command:
+                    new_cfg["command"] = [command, *args]
+                new_cfg["type"] = "local"
+                new_cfg["enabled"] = new_cfg.get("enabled", True)
             result[name] = new_cfg
         return result
+
+    def _from_opencode_file(self, path: Path, info: dict) -> dict:
+        try:
+            data = json.loads(path.read_text())
+            raw = data.get(info.get("mcp_key", "mcp"), {})
+            result = {}
+            for name, cfg in raw.items():
+                if not isinstance(cfg, dict):
+                    continue
+                new_cfg = dict(cfg)
+                server_type = new_cfg.pop("type", None)
+                new_cfg.pop("enabled", None)
+                if server_type == "local" and isinstance(new_cfg.get("command"), list):
+                    command = new_cfg["command"]
+                    if command:
+                        new_cfg["command"] = command[0]
+                        if len(command) > 1:
+                            new_cfg["args"] = command[1:]
+                result[name] = new_cfg
+            return result
+        except Exception:
+            return {}
 
     def _to_codex_toml_format(self, servers: dict) -> dict:
         """Convert internal format to Codex's config.toml MCP format."""
@@ -226,6 +257,8 @@ class AgentMcpSync:
             return {}
         try:
             if info and info.get("format") == "toml" and info.get("from_file"):
+                return info["from_file"](path, info)
+            if info and info.get("from_file"):
                 return info["from_file"](path, info)
             data = json.loads(path.read_text())
             mcp_key = info.get("mcp_key", "mcpServers") if info else "mcpServers"

@@ -131,8 +131,11 @@ def test_mcp_sync_opencode_bidirectional(mcp_syncer, temp_home):
 
     opencode_data = json.loads(opencode_path.read_text())
     assert "html-portal" in opencode_data["mcp"]
-    assert opencode_data["mcp"]["html-portal"]["type"] == "stdio"
+    assert opencode_data["mcp"]["html-portal"]["type"] == "local"
+    assert opencode_data["mcp"]["html-portal"]["command"] == ["tsx", "index.ts"]
+    assert opencode_data["mcp"]["html-portal"]["enabled"] is True
     assert "context7" in opencode_data["mcp"]
+    assert opencode_data["mcp"]["context7"]["enabled"] is True
     assert "$schema" in opencode_data
 
     claude_data = json.loads(claude_code_path.read_text())
@@ -160,7 +163,9 @@ def test_mcp_sync_opencode_preserves_top_level_keys(mcp_syncer, temp_home):
     assert opencode_data["permission"] == "deny"
     assert opencode_data["agent"] == {"general": {"model": "claude"}}
     assert "s1" in opencode_data["mcp"]
-    assert opencode_data["mcp"]["s1"]["type"] == "stdio"
+    assert opencode_data["mcp"]["s1"]["type"] == "local"
+    assert opencode_data["mcp"]["s1"]["command"] == ["c1"]
+    assert opencode_data["mcp"]["s1"]["enabled"] is True
 
 
 def test_mcp_sync_antigravity_cli_plugin(mcp_syncer, temp_home):
