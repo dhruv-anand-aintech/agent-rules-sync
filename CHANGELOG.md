@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-05-22
+
+### Publishing
+
+- Make repeated PyPI publish workflow runs skip already-uploaded distribution files.
+
 ## [1.5.1] - 2026-05-19
 
 ### Daemon
