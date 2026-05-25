@@ -169,7 +169,13 @@ class AgentSkillsSync:
         return names
 
     def _skill_dir_hash(self, skill_path):
-        """Compute content hash of a skill directory for change detection."""
+        """Compute a cheap change-detection token for a skill directory.
+
+        Uses mtime+size of each file rather than reading file contents — this is
+        called every 3s in the poll loop across all skill dirs, so avoiding
+        read_bytes() cuts CPU dramatically. A content-level hash is only needed
+        when we actually sync, not to detect whether syncing is needed.
+        """
         if not skill_path.exists() or not self._is_valid_skill_dir(skill_path):
             return None
         hasher = hashlib.sha256()
@@ -179,7 +185,8 @@ class AgentSkillsSync:
                 p.startswith(".") or p == "__pycache__" for p in rel.parts
             ):
                 hasher.update(str(rel).encode())
-                hasher.update(f.read_bytes())
+                st = f.stat()
+                hasher.update(f"{st.st_mtime_ns}:{st.st_size}".encode())
         return hasher.hexdigest()
 
     def _get_newest_skill_source(self, skill_name):
