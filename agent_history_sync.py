@@ -453,11 +453,12 @@ class AgentHistorySync:
         if not self.cursor_state_db.exists():
             return
         workspace_map = self._cursor_composer_workspace_map()
+        max_rows = 5000
         try:
             conn = sqlite3.connect(str(self.cursor_state_db))
             conn.row_factory = sqlite3.Row
             try:
-                rows = conn.execute(
+                cursor = conn.execute(
                     """
                     select
                         substr(key, 10, 36) as composer_id,
@@ -468,9 +469,12 @@ class AgentHistorySync:
                     from cursorDiskKV
                     where key like 'bubbleId:%'
                       and json_extract(value, '$.toolFormerData.name') in ('run_terminal_command_v2', 'run_terminal_cmd')
-                    order by key
-                    """
-                ).fetchall()
+                    order by key desc
+                    limit ?
+                    """,
+                    (max_rows,),
+                )
+                rows = cursor.fetchall()
             finally:
                 conn.close()
         except Exception:
@@ -503,6 +507,7 @@ class AgentHistorySync:
     def _cursor_composer_times(self) -> dict[str, tuple[int | None, int | None]]:
         if not self.cursor_state_db.exists():
             return {}
+        max_composers = 2000
         try:
             conn = sqlite3.connect(str(self.cursor_state_db))
             try:
@@ -514,7 +519,10 @@ class AgentHistorySync:
                         json_extract(value, '$.lastUpdatedAt') as updated_at
                     from cursorDiskKV
                     where key like 'composerData:%'
-                    """
+                    order by key desc
+                    limit ?
+                    """,
+                    (max_composers,),
                 ).fetchall()
             finally:
                 conn.close()
@@ -767,7 +775,7 @@ class AgentHistorySync:
                 )
                 offset += 1
 
-    def _recent_files(self, root: Path, pattern: str) -> list[Path]:
+    def _recent_files(self, root: Path, pattern: str, max_files: int = 100) -> list[Path]:
         if not root.exists():
             return []
         cutoff = time.time() - (30 * 24 * 60 * 60)
@@ -775,7 +783,7 @@ class AgentHistorySync:
             files = [p for p in root.rglob(pattern) if p.is_file() and p.stat().st_mtime >= cutoff]
         except OSError:
             return []
-        return sorted(files, key=lambda p: p.stat().st_mtime)
+        return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)[:max_files]
 
     @staticmethod
     def _path_signature(path: Path) -> str | None:
