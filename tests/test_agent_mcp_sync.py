@@ -12,6 +12,7 @@ def temp_home(tmp_path):
     home.mkdir()
     
     # Mock global paths
+    (home / ".claude").mkdir()
     (home / ".cursor").mkdir()
     (home / ".gemini").mkdir()
     (home / ".config" / "opencode").mkdir(parents=True)
@@ -32,7 +33,7 @@ def mcp_syncer(temp_home, monkeypatch):
 
 def test_mcp_sync_bidirectional(mcp_syncer, temp_home):
     # 1. Setup initial servers in different agents
-    claude_code_path = temp_home / ".claude.json"
+    claude_code_path = temp_home / ".claude" / ".mcp.json"
     claude_code_path.write_text(json.dumps({
         "mcpServers": {
             "claude-server": {"command": "claude-cmd"}
@@ -91,7 +92,7 @@ def test_mcp_sync_with_repos(mcp_syncer, temp_home):
 
 def test_mcp_sync_preserves_other_keys(mcp_syncer, temp_home):
     # Setup Claude Code with extra keys
-    claude_code_path = temp_home / ".claude.json"
+    claude_code_path = temp_home / ".claude" / ".mcp.json"
     claude_code_path.write_text(json.dumps({
         "oauth": "secret-token",
         "mcpServers": {
@@ -109,7 +110,7 @@ def test_mcp_sync_preserves_other_keys(mcp_syncer, temp_home):
 
 
 def test_mcp_sync_opencode_bidirectional(mcp_syncer, temp_home):
-    claude_code_path = temp_home / ".claude.json"
+    claude_code_path = temp_home / ".claude" / ".mcp.json"
     claude_code_path.write_text(json.dumps({
         "mcpServers": {
             "html-portal": {"type": "stdio", "command": "tsx", "args": ["index.ts"]}
@@ -153,7 +154,7 @@ def test_mcp_sync_opencode_preserves_top_level_keys(mcp_syncer, temp_home):
         "mcp": {}
     }))
 
-    claude_code_path = temp_home / ".claude.json"
+    claude_code_path = temp_home / ".claude" / ".mcp.json"
     claude_code_path.write_text(json.dumps({
         "mcpServers": {"s1": {"command": "c1"}}
     }))
@@ -171,7 +172,7 @@ def test_mcp_sync_opencode_preserves_top_level_keys(mcp_syncer, temp_home):
 
 
 def test_mcp_sync_antigravity_cli_plugin(mcp_syncer, temp_home):
-    claude_code_path = temp_home / ".claude.json"
+    claude_code_path = temp_home / ".claude" / ".mcp.json"
     claude_code_path.write_text(json.dumps({
         "mcpServers": {"s1": {"command": "c1"}}
     }))
@@ -191,7 +192,7 @@ def test_mcp_sync_master_deletion_propagates_when_master_is_newest(mcp_syncer, t
     all agents on the next sync."""
 
     # 1. Bootstrap with two servers via an agent file
-    claude_code_path = temp_home / ".claude.json"
+    claude_code_path = temp_home / ".claude" / ".mcp.json"
     claude_code_path.write_text(json.dumps({
         "mcpServers": {
             "keep-me": {"command": "keep"},
@@ -232,7 +233,7 @@ def test_mcp_sync_agent_addition_merges_when_agent_is_newest(mcp_syncer, temp_ho
 
     # 2. Add a new server via an agent file, make it newest
     time.sleep(0.05)
-    claude_code_path = temp_home / ".claude.json"
+    claude_code_path = temp_home / ".claude" / ".mcp.json"
     claude_code_path.write_text(json.dumps({
         "mcpServers": {
             "existing": {"command": "exists"},

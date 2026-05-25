@@ -849,6 +849,7 @@ class AgentRulesSync:
         settings_hashes,
         mcp_hashes,
         history_hashes,
+        check_history=True,
     ):
         changed = False
 
@@ -891,7 +892,13 @@ class AgentRulesSync:
             mcp_hashes.clear()
             mcp_hashes.update(self.mcp_sync.get_watch_hashes())
 
-        history_paths = self.history_sync.history_changed(history_hashes)
+        # History check is expensive (~360ms rglob over 600+ transcript files) and must
+        # not run on every FSEvent. Callers that want history results pass check_history=True
+        # explicitly; the hot event path passes check_history=False.
+        if check_history:
+            history_paths = self.history_sync.history_changed(history_hashes)
+        else:
+            history_paths = []
 
         return changed, history_paths
 
@@ -916,10 +923,10 @@ class AgentRulesSync:
             roots.add(path.parent)
         for path in mcp_hashes:
             roots.add(path.parent)
-        for root in self.history_sync.transcript_roots():
-            roots.add(root)
-        for path in history_hashes:
-            roots.add(path.parent)
+        # NOTE: transcript roots (claude/projects, codex/sessions, etc.) are intentionally
+        # excluded from the FSEvents observer. Those dirs receive constant appends from active
+        # AI sessions and would fire _detect_watch_changes (including a 360ms rglob) on every
+        # message. History sync runs on its own periodic timer instead (see _run_event_watch_loop).
 
         if hasattr(self.settings_sync, "repo_paths"):
             for repo in self.settings_sync.repo_paths:
@@ -1012,18 +1019,14 @@ class AgentRulesSync:
 
         observer.start()
         self._log_message("Event watch started")
+        HISTORY_INTERVAL = 60  # seconds between history scans (expensive rglob, not event-driven)
+        last_history_check = time.monotonic()
         try:
             while not self.stop_event.is_set():
                 try:
-                    event_queue.get(timeout=300)
+                    event_queue.get(timeout=HISTORY_INTERVAL)
                 except queue.Empty:
-                    changed = self._detect_watch_changes(
-                        file_hashes,
-                        skill_hashes,
-                        settings_hashes,
-                        mcp_hashes,
-                        history_hashes,
-                    )
+                    pass
                 else:
                     time.sleep(0.75)
                     while True:
@@ -1031,26 +1034,40 @@ class AgentRulesSync:
                             event_queue.get_nowait()
                         except queue.Empty:
                             break
-                    changed = self._detect_watch_changes(
-                        file_hashes,
-                        skill_hashes,
-                        settings_hashes,
-                        mcp_hashes,
-                        history_hashes,
-                    )
 
-                changed, history_paths = changed
+                changed, _ignored_history = self._detect_watch_changes(
+                    file_hashes,
+                    skill_hashes,
+                    settings_hashes,
+                    mcp_hashes,
+                    history_hashes,
+                    check_history=False,  # history scanned on slow timer below, not every event
+                )
                 if changed:
                     self.sync()
                     self._refresh_watch_state_after_sync(
                         file_hashes, skill_hashes, settings_hashes, mcp_hashes, history_hashes
                     )
+                    # Drain any FSEvents queued during sync — skill/settings writes by sync()
+                    # itself fire events that would immediately re-trigger a sync (write-loop).
+                    # Safe to discard: we just refreshed watch state to the post-sync baseline.
+                    try:
+                        while True:
+                            event_queue.get_nowait()
+                    except queue.Empty:
+                        pass
                     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     msg = "✓ Synced rules and skills across all agents"
                     print(f"[{timestamp}] {msg}")
                     self._log_message(msg)
-                if history_paths:
-                    self._sync_history_paths(history_paths)
+
+                # History sync on a slow timer — rglob across 600+ transcript files is ~360ms
+                now = time.monotonic()
+                if now - last_history_check >= HISTORY_INTERVAL:
+                    last_history_check = now
+                    history_paths = self.history_sync.history_changed(history_hashes)
+                    if history_paths:
+                        self._sync_history_paths(history_paths)
         finally:
             observer.stop()
             observer.join()

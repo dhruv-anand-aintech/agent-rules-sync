@@ -41,7 +41,7 @@ class AgentMcpSync:
         self.global_sources = {
             "claude-code": {
                 "name": "Claude Code",
-                "path": Path.home() / ".claude.json",
+                "path": Path.home() / ".claude" / ".mcp.json",
             },
             "cursor": {
                 "name": "Cursor",
