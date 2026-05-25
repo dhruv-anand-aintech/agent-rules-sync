@@ -280,9 +280,35 @@ class AgentMcpSync:
         backup_path = self.backup_dir / f"{label}_{timestamp}.json"
         shutil.copy2(path, backup_path)
 
+    def _master_is_newest(self):
+        """
+        Return True if master mcp.json has a strictly newer mtime than
+        every agent/repo MCP config file.  When True, master is
+        authoritative and its deletions propagate.
+        """
+        if not self.master_file.exists():
+            return False
+        master_mtime = self.master_file.stat().st_mtime
+
+        for info in self.global_sources.values():
+            path = info["path"]
+            if path.exists() and path.stat().st_mtime > master_mtime:
+                return False
+
+        for repo in self.repo_paths:
+            for path in [
+                repo / ".mcp.json",
+                repo / ".cursor" / "mcp.json",
+                repo / ".gemini" / "mcp.json",
+            ]:
+                if path.exists() and path.stat().st_mtime > master_mtime:
+                    return False
+
+        return True
+
     def sync(self, log_callback=None, direction="bidirectional"):
         log = log_callback or (lambda _: None)
-        
+
         # 1. Load current master
         master_data = {}
         if self.master_file.exists():
@@ -291,64 +317,85 @@ class AgentMcpSync:
             except Exception:
                 pass
 
-        # 2. Collect from all sources (Union for additions)
-        all_servers = dict(master_data)
-
-        # Global sources
-        for label, info in self.global_sources.items():
-            path = info["path"]
-            if path.exists():
-                servers = self._get_mcp_servers(path, info)
-                for name, cfg in servers.items():
-                    if name not in all_servers or direction != "push":
-                        all_servers[name] = cfg
-
-        # Repo sources
-        for repo in self.repo_paths:
-            repo_mcp_paths = [
-                repo / ".mcp.json",
-                repo / ".cursor" / "mcp.json",
-                repo / ".gemini" / "mcp.json"
-            ]
-            for path in repo_mcp_paths:
+        if direction == "push":
+            # Master is source of truth — push to all, no merging
+            all_servers = dict(master_data)
+        elif direction == "pull":
+            # Aggregate from agents into master, don't push back
+            all_servers = dict(master_data)
+            for label, info in self.global_sources.items():
+                path = info["path"]
                 if path.exists():
-                    servers = self._get_mcp_servers(path)
+                    servers = self._get_mcp_servers(path, info)
                     for name, cfg in servers.items():
-                        if name not in all_servers or direction != "push":
+                        all_servers[name] = cfg
+            for repo in self.repo_paths:
+                for path in [
+                    repo / ".mcp.json",
+                    repo / ".cursor" / "mcp.json",
+                    repo / ".gemini" / "mcp.json",
+                ]:
+                    if path.exists():
+                        servers = self._get_mcp_servers(path)
+                        for name, cfg in servers.items():
                             all_servers[name] = cfg
+        else:
+            # Bidirectional — mtime decides who wins
+            if self._master_is_newest():
+                # Master was edited most recently: its contents are authoritative
+                # (deletions from master propagate to all agents)
+                all_servers = dict(master_data)
+                log(f"[mcp] Master is newest — pushing to all agents")
+            else:
+                # One or more agent/repo files are newer: union-merge all
+                # sources into master (additions from agents flow in)
+                all_servers = dict(master_data)
+                for label, info in self.global_sources.items():
+                    path = info["path"]
+                    if path.exists():
+                        servers = self._get_mcp_servers(path, info)
+                        for name, cfg in servers.items():
+                            all_servers[name] = cfg
+                for repo in self.repo_paths:
+                    for path in [
+                        repo / ".mcp.json",
+                        repo / ".cursor" / "mcp.json",
+                        repo / ".gemini" / "mcp.json",
+                    ]:
+                        if path.exists():
+                            servers = self._get_mcp_servers(path)
+                            for name, cfg in servers.items():
+                                all_servers[name] = cfg
 
         # 3. Save to master
         new_master = {"mcpServers": all_servers}
         new_master_json = json.dumps(new_master, indent=2) + "\n"
-        
+
         if not self.master_file.exists() or self.master_file.read_text() != new_master_json:
             if self.master_file.exists():
                 self._backup_file(self.master_file, "master")
             self.master_file.write_text(new_master_json)
             log(f"[mcp] Updated master mcp.json with {len(all_servers)} servers")
 
-        # 4. Push back if bidirectional or push
-        if direction in ("bidirectional", "push"):
-            for label, info in self.global_sources.items():
-                path = info["path"]
-                if label == "antigravity-cli":
-                    ensure_antigravity_cli_plugin()
-                self._update_target(path, all_servers, label, log, info)
+        # 4. Push back to agents (skip for pull-only)
+        if direction == "pull":
+            return
 
-            for repo in self.repo_paths:
-                # For repos, we might want to be more selective, but usually 
-                # .cursor/mcp.json or .mcp.json should have everything if synced.
-                # We'll sync to the same files we read from.
-                repo_mcp_paths = [
-                    repo / ".mcp.json",
-                    repo / ".cursor" / "mcp.json",
-                    repo / ".gemini" / "mcp.json"
-                ]
-                for path in repo_mcp_paths:
-                    # Only update if the file already exists or it's a known location we want to populate
-                    # For now, let's only update if it exists to avoid cluttering every repo with 3 files.
-                    if path.exists():
-                         self._update_target(path, all_servers, f"repo:{repo.name}", log)
+        for label, info in self.global_sources.items():
+            path = info["path"]
+            if label == "antigravity-cli":
+                ensure_antigravity_cli_plugin()
+            self._update_target(path, all_servers, label, log, info)
+
+        for repo in self.repo_paths:
+            repo_mcp_paths = [
+                repo / ".mcp.json",
+                repo / ".cursor" / "mcp.json",
+                repo / ".gemini" / "mcp.json",
+            ]
+            for path in repo_mcp_paths:
+                if path.exists():
+                    self._update_target(path, all_servers, f"repo:{repo.name}", log)
 
     def _update_target(self, path: Path, servers: dict, label: str, log, info: dict = None):
         if not path.parent.exists():

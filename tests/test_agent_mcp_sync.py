@@ -1,4 +1,6 @@
 import json
+import os
+import time
 import pytest
 from pathlib import Path
 from agent_mcp_sync import AgentMcpSync
@@ -181,3 +183,66 @@ def test_mcp_sync_antigravity_cli_plugin(mcp_syncer, temp_home):
 
     mcp_data = json.loads((plugin_dir / "mcp_config.json").read_text())
     assert "s1" in mcp_data["mcpServers"]
+
+
+def test_mcp_sync_master_deletion_propagates_when_master_is_newest(mcp_syncer, temp_home):
+    """When master is the most recently modified file, its contents are
+    authoritative — removing a server from master should delete it from
+    all agents on the next sync."""
+
+    # 1. Bootstrap with two servers via an agent file
+    claude_code_path = temp_home / ".claude.json"
+    claude_code_path.write_text(json.dumps({
+        "mcpServers": {
+            "keep-me": {"command": "keep"},
+            "remove-me": {"command": "remove"},
+        }
+    }))
+    mcp_syncer.sync(direction="bidirectional")
+
+    # Verify both propagated
+    master_data = json.loads(mcp_syncer.master_file.read_text())
+    assert "keep-me" in master_data["mcpServers"]
+    assert "remove-me" in master_data["mcpServers"]
+
+    # 2. Edit master to remove one server, make master strictly newest
+    time.sleep(0.05)
+    master_data["mcpServers"].pop("remove-me")
+    mcp_syncer.master_file.write_text(json.dumps(master_data, indent=2) + "\n")
+
+    # 3. Sync again — master is newest, deletion should propagate
+    mcp_syncer.sync(direction="bidirectional")
+
+    claude_data = json.loads(claude_code_path.read_text())
+    assert "keep-me" in claude_data["mcpServers"]
+    assert "remove-me" not in claude_data["mcpServers"], \
+        "Server deleted from master should be removed from agents"
+
+
+def test_mcp_sync_agent_addition_merges_when_agent_is_newest(mcp_syncer, temp_home):
+    """When an agent file is newer than master, its additions should merge
+    into master (union behaviour preserved for new servers)."""
+
+    # 1. Bootstrap master with one server
+    mcp_syncer.master_file.write_text(json.dumps({
+        "mcpServers": {
+            "existing": {"command": "exists"},
+        }
+    }))
+
+    # 2. Add a new server via an agent file, make it newest
+    time.sleep(0.05)
+    claude_code_path = temp_home / ".claude.json"
+    claude_code_path.write_text(json.dumps({
+        "mcpServers": {
+            "existing": {"command": "exists"},
+            "brand-new": {"command": "new"},
+        }
+    }))
+
+    # 3. Sync — agent is newest, additions should merge
+    mcp_syncer.sync(direction="bidirectional")
+
+    master_data = json.loads(mcp_syncer.master_file.read_text())
+    assert "existing" in master_data["mcpServers"]
+    assert "brand-new" in master_data["mcpServers"]
