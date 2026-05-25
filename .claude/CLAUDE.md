@@ -208,6 +208,14 @@ These notes speed up diagnosing “sync is broken” reports. Several past incid
 ### Development install
 - From this repo: `pip install -e .` so `python -m agent_rules_sync` and the console scripts resolve `agent_sync_config` and friends; avoids `ModuleNotFoundError` when running the module from a random CWD.
 
+### Codex skill metadata warnings
+- Skills are synced from `~/.config/agent-rules-sync/skills/<skill>/SKILL.md`; patch that master copy first, then run `python3 agent_rules_sync.py sync skills` or wait for the daemon.
+- Codex validates both `~/.codex/skills` and `~/.agents/skills`, so the same bad master skill usually appears as duplicate warnings.
+- Use simple Codex-compatible YAML frontmatter: `---`, `name: skill-name`, a short single-line quoted `description: "..."` under 1024 characters, then closing `---`.
+- Past syntax issues fixed here: missing frontmatter delimiters, missing `name`, missing `description`, descriptions over 1024 characters, and multiline/folded descriptions like `description: >-` being reported by Codex as missing `description`.
+- Verification: run `python3 agent_rules_sync.py sync skills`, inspect the first 12 lines of the master plus `~/.codex/skills/<skill>/SKILL.md` and `~/.agents/skills/<skill>/SKILL.md`, then run a small `codex exec` startup check and grep output for the warning text.
+- I found no dedicated Codex CLI flag in `codex --help`, `codex exec --help`, or `codex features list` to hide only invalid-skill warnings. `codex exec --ignore-user-config` avoids loading user config and skills entirely for automation, but normal interactive use should fix the metadata instead.
+
 ### Legacy `.cursorrules` (Cursor)
 - [Cursor rules docs](https://cursor.com/docs/rules): `.cursor/rules/` is preferred; **`.cursorrules`** at a project root is legacy but still supported.
 - Sync **mirrors** the same body as `~/.cursor/rules/global.mdc` to **`~/.cursorrules`** and to **`<repo>/.cursorrules`** for each `repo_paths.json` entry, and **merges** bullets from those files on the next sync.
