@@ -914,7 +914,12 @@ class AgentRulesSync:
         if self._cursor_layout_is_canonical():
             roots.add(self._cursor_primary_path().parent)
         for _, p in self._cursorrules_watch_pairs():
-            roots.add(p.parent)
+            # ~/.cursorrules lives directly in ~; adding its parent would watch the entire
+            # home directory recursively via FSEvents — every transcript append, cache write,
+            # etc. would fire. Skip home-level paths; .cursorrules is stable and low-churn,
+            # so the 3s polling fallback in _run_polling_watch_loop is sufficient coverage.
+            if p.parent != Path.home():
+                roots.add(p.parent)
 
         for fw in self.skills_sync.frameworks.values():
             roots.add(fw["path"])
