@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.5.3] - 2026-05-25
+
+### ⚡ Performance
+- Fix FSEvents watch loop watching entire home directory due to `~/.cursorrules` parent path — daemon CPU 40% → 2% idle
+- Replace `read_bytes()` content hashing in skill change detection with mtime+size stat — eliminates file reads on every 3s poll tick
+- Drain FSEvents queue after each sync to break write-loop (sync writes → FSEvent → re-detect → sync again)
+- Exclude transcript roots from FSEvents observer; history sync moved to 60s periodic timer
+- Add `check_history=False` fast path in event loop so rglob over 600+ transcript files only runs every 60s
+
 ## [1.5.2] - 2026-05-22
 
 ### Publishing
