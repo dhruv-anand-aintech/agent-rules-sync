@@ -751,9 +751,27 @@ class AgentRulesSync:
         except Exception as e:
             self._log_error(f"Sync error: {e}")
 
+    def _rotate_log_if_needed(self, max_size_mb=5):
+        """Truncate log if it exceeds max_size_mb, keeping the last 25%."""
+        try:
+            log_file = self.config_dir / "daemon.log"
+            if not log_file.exists():
+                return
+            size_mb = log_file.stat().st_size / (1024 * 1024)
+            if size_mb <= max_size_mb:
+                return
+            lines = log_file.read_text(encoding="utf-8", errors="replace").splitlines()
+            keep = max(len(lines) // 4, 500)
+            rotated = "\n".join(lines[-keep:]) + "\n"
+            rotated = f"# Log rotated (was {size_mb:.1f}MB)\n" + rotated
+            log_file.write_text(rotated, encoding="utf-8")
+        except Exception:
+            pass
+
     def _log_error(self, msg):
         """Log error to daemon log file."""
         try:
+            self._rotate_log_if_needed()
             log_file = self.config_dir / "daemon.log"
             with open(log_file, 'a') as f:
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -765,6 +783,12 @@ class AgentRulesSync:
         """Log message to daemon log file."""
         try:
             log_file = self.config_dir / "daemon.log"
+            # Rotate if needed (sampled: only check ~every 100 messages)
+            if not hasattr(self, '_log_count'):
+                self._log_count = 0
+            self._log_count += 1
+            if self._log_count % 100 == 0:
+                self._rotate_log_if_needed()
             with open(log_file, 'a') as f:
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 f.write(f"[{timestamp}] {msg}\n")
@@ -1050,6 +1074,8 @@ class AgentRulesSync:
 
     def watch(self, interval=3):
         """Watch for changes and auto-sync."""
+        self._rotate_log_if_needed()
+
         # Save PID so status and guardian can track us
         try:
             with open(self.pid_file, 'w') as f:
