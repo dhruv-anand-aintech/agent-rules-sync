@@ -81,7 +81,9 @@ Skills are directories containing a `SKILL.md` file. Synced across all framework
 
 Newest version wins. Add a skill anywhere and the daemon syncs it to the other locations automatically.
 
-### 3. Settings & Hooks (Claude Code)
+### 3. Settings & Hooks (Claude Code + Roadmap)
+
+#### Current: Portable Settings
 
 Syncs a **portable version** of `~/.claude/settings.json` to configured repos' `.claude/settings.json`:
 
@@ -91,6 +93,21 @@ Syncs a **portable version** of `~/.claude/settings.json` to configured repos' `
 - **Copies hook scripts** into the repo's `.claude/hooks/`
 
 This enables full tool permissions and hooks when using **Claude Code web** on those repos.
+
+#### Roadmap: Cross-Agent Settings Sync
+
+Coming soon: Synchronize keyboard shortcuts, themes, auto-save, debugging, and other agent-specific settings across Claude Code, Cursor, Cline, Aider, and more.
+
+**Discovery phase complete.** See:
+- `SETTINGS_SYNC_TODO.md` — Implementation roadmap for 9 new settings categories
+- `SETTINGS_REFERENCE.md` — Platform-specific settings mappings and sync strategies
+
+**Priority settings for sync:**
+1. Keyboard shortcuts (Cursor, Claude Code, VS Code extensions)
+2. Theme customization (Dark/light mode across IDEs)
+3. Auto-save behavior (CLI and IDE agents)
+
+See `SETTINGS_SYNC_TODO.md` for full implementation plan and effort estimates.
 
 ### 4. MCP Servers (`mcp.json`)
 
