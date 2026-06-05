@@ -40,4 +40,4 @@ agent-sync = "agent_rules_sync:main"
 agent-rules-sync = "agent_rules_sync:main"
 
 [tool.setuptools]
-py-modules = ["agent_rules_sync", "agent_skills_sync", "agent_settings_sync", "agent_mcp_sync", "agent_history_sync", "agent_sync_config", "agent_antigravity_cli", "install_daemon"]
+py-modules = ["agent_rules_sync", "agent_skills_sync", "agent_settings_sync", "agent_mcp_sync", "agent_history_sync", "agent_sync_config", "agent_antigravity_cli", "agent_exclusions", "install_daemon"]

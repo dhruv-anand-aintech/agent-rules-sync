@@ -6,9 +6,9 @@
   },
   "plugins": [
     {
-      "name": "terminal-selector",
-      "source": "./plugins/terminal-selector",
-      "description": "Terminal-native single, multi, and ranked selection tools for coding agents."
+      "name": "multi-select-reorder",
+      "source": "./plugins/multi-select-reorder",
+      "description": "Ad hoc web UI for multi-select choices with drag-and-drop reordering."
     }
   ]
 }

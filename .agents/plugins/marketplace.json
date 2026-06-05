@@ -5,10 +5,10 @@
   },
   "plugins": [
     {
-      "name": "terminal-selector",
+      "name": "multi-select-reorder",
       "source": {
         "source": "local",
-        "path": "./plugins/terminal-selector"
+        "path": "./plugins/multi-select-reorder"
       },
       "policy": {
         "installation": "AVAILABLE",
