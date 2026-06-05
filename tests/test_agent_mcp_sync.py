@@ -33,7 +33,7 @@ def mcp_syncer(temp_home, monkeypatch):
 
 def test_mcp_sync_bidirectional(mcp_syncer, temp_home):
     # 1. Setup initial servers in different agents
-    claude_code_path = temp_home / ".claude" / ".mcp.json"
+    claude_code_path = temp_home / ".claude.json"
     claude_code_path.write_text(json.dumps({
         "mcpServers": {
             "claude-server": {"command": "claude-cmd"}
@@ -92,7 +92,7 @@ def test_mcp_sync_with_repos(mcp_syncer, temp_home):
 
 def test_mcp_sync_preserves_other_keys(mcp_syncer, temp_home):
     # Setup Claude Code with extra keys
-    claude_code_path = temp_home / ".claude" / ".mcp.json"
+    claude_code_path = temp_home / ".claude.json"
     claude_code_path.write_text(json.dumps({
         "oauth": "secret-token",
         "mcpServers": {
@@ -110,7 +110,7 @@ def test_mcp_sync_preserves_other_keys(mcp_syncer, temp_home):
 
 
 def test_mcp_sync_opencode_bidirectional(mcp_syncer, temp_home):
-    claude_code_path = temp_home / ".claude" / ".mcp.json"
+    claude_code_path = temp_home / ".claude.json"
     claude_code_path.write_text(json.dumps({
         "mcpServers": {
             "html-portal": {"type": "stdio", "command": "tsx", "args": ["index.ts"]}
@@ -154,7 +154,7 @@ def test_mcp_sync_opencode_preserves_top_level_keys(mcp_syncer, temp_home):
         "mcp": {}
     }))
 
-    claude_code_path = temp_home / ".claude" / ".mcp.json"
+    claude_code_path = temp_home / ".claude.json"
     claude_code_path.write_text(json.dumps({
         "mcpServers": {"s1": {"command": "c1"}}
     }))
@@ -171,8 +171,58 @@ def test_mcp_sync_opencode_preserves_top_level_keys(mcp_syncer, temp_home):
     assert opencode_data["mcp"]["s1"]["enabled"] is True
 
 
+def test_mcp_sync_excludes_server_for_target(mcp_syncer, temp_home):
+    (mcp_syncer.config_dir / "excludes.json").write_text(json.dumps({
+        "mcp": {"agents": {"opencode": ["skip-me"]}}
+    }))
+    mcp_syncer.exclusions = __import__("agent_exclusions").ExclusionRules(mcp_syncer.config_dir)
+
+    mcp_syncer.master_file.write_text(json.dumps({
+        "mcpServers": {
+            "keep-me": {"command": "keep"},
+            "skip-me": {"command": "skip"},
+        }
+    }))
+
+    opencode_path = temp_home / ".config" / "opencode" / "opencode.json"
+    opencode_path.write_text(json.dumps({"mcp": {}}))
+
+    mcp_syncer.sync(direction="push")
+
+    data = json.loads(opencode_path.read_text())
+    assert "keep-me" in data["mcp"]
+    assert "skip-me" not in data["mcp"]
+
+
+def test_mcp_sync_imports_package_plugin_mcp(mcp_syncer, temp_home, tmp_path):
+    plugin_dir = tmp_path / "plugins" / "selector"
+    plugin_dir.mkdir(parents=True)
+    server_path = plugin_dir / "selector" / "mcp_server.py"
+    server_path.parent.mkdir()
+    server_path.write_text("print('server')\n")
+    plugin_mcp = plugin_dir / ".mcp.json"
+    plugin_mcp.write_text(json.dumps({
+        "mcpServers": {
+            "selector-mcp": {
+                "command": "python3",
+                "args": ["./selector/mcp_server.py"],
+                "cwd": "."
+            }
+        }
+    }))
+    mcp_syncer.plugin_mcp_paths = [plugin_mcp]
+
+    mcp_syncer.sync(direction="pull")
+
+    master_data = json.loads(mcp_syncer.master_file.read_text())
+    server = master_data["mcpServers"]["selector-mcp"]
+    assert server["command"] == "python3"
+    assert server["args"] == [str(server_path.resolve())]
+    assert "cwd" not in server
+
+
 def test_mcp_sync_antigravity_cli_plugin(mcp_syncer, temp_home):
-    claude_code_path = temp_home / ".claude" / ".mcp.json"
+    claude_code_path = temp_home / ".claude.json"
     claude_code_path.write_text(json.dumps({
         "mcpServers": {"s1": {"command": "c1"}}
     }))
@@ -192,7 +242,7 @@ def test_mcp_sync_master_deletion_propagates_when_master_is_newest(mcp_syncer, t
     all agents on the next sync."""
 
     # 1. Bootstrap with two servers via an agent file
-    claude_code_path = temp_home / ".claude" / ".mcp.json"
+    claude_code_path = temp_home / ".claude.json"
     claude_code_path.write_text(json.dumps({
         "mcpServers": {
             "keep-me": {"command": "keep"},
@@ -233,7 +283,7 @@ def test_mcp_sync_agent_addition_merges_when_agent_is_newest(mcp_syncer, temp_ho
 
     # 2. Add a new server via an agent file, make it newest
     time.sleep(0.05)
-    claude_code_path = temp_home / ".claude" / ".mcp.json"
+    claude_code_path = temp_home / ".claude.json"
     claude_code_path.write_text(json.dumps({
         "mcpServers": {
             "existing": {"command": "exists"},

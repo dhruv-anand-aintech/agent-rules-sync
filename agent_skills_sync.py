@@ -28,6 +28,7 @@ from datetime import datetime
 from pathlib import Path
 
 from agent_antigravity_cli import ensure_plugin as ensure_antigravity_cli_plugin
+from agent_exclusions import ExclusionRules
 
 
 class AgentSkillsSync:
@@ -44,6 +45,7 @@ class AgentSkillsSync:
         self.master_skills_dir.mkdir(exist_ok=True)
         self.backup_dir = self.config_dir / "skill_backups"
         self.backup_dir.mkdir(exist_ok=True)
+        self.exclusions = ExclusionRules(self.config_dir)
 
         # Resolve CODEX_HOME for Codex skills path
         codex_home = os.environ.get("CODEX_HOME")
@@ -142,9 +144,18 @@ class AgentSkillsSync:
         except StopIteration:
             return False
         frontmatter = [line.strip() for line in lines[1:closing_index]]
-        return any(line.startswith("name:") for line in frontmatter) and any(
-            line.startswith("description:") for line in frontmatter
-        )
+        has_name = False
+        has_description = False
+        for line in frontmatter:
+            if line.startswith("name:"):
+                has_name = bool(line.split(":", 1)[1].strip().strip("'\""))
+            if line.startswith("description:"):
+                value = line.split(":", 1)[1].strip()
+                if value in {">", "|", ">-", "|-"}:
+                    has_description = True
+                else:
+                    has_description = bool(value.strip("'\""))
+        return has_name and has_description
 
     def _is_valid_skill_dir(self, path):
         """Return True if path is a skill directory with valid SKILL.md metadata."""
@@ -164,8 +175,9 @@ class AgentSkillsSync:
     def _get_all_skill_names(self):
         """Union of skill names from master and all framework directories."""
         names = self._list_skills_in_dir(self.master_skills_dir)
-        for fw in self.frameworks.values():
-            names.update(self._list_skills_in_dir(fw["path"]))
+        for fw_id, fw in self.frameworks.items():
+            excluded = self._excluded_skills_for_framework(fw_id)
+            names.update(self._list_skills_in_dir(fw["path"]) - excluded)
         return names
 
     def _skill_dir_hash(self, skill_path):
@@ -200,7 +212,9 @@ class AgentSkillsSync:
             mtime = (master_path / self.SKILL_MD).stat().st_mtime
             candidates.append((master_path, mtime))
 
-        for fw in self.frameworks.values():
+        for fw_id, fw in self.frameworks.items():
+            if skill_name in self._excluded_skills_for_framework(fw_id):
+                continue
             skill_path = fw["path"] / skill_name
             if self._is_valid_skill_dir(skill_path):
                 mtime = (skill_path / self.SKILL_MD).stat().st_mtime
@@ -279,6 +293,7 @@ class AgentSkillsSync:
         log = log_callback or (lambda _: None)
 
         all_skills = self._get_all_skill_names()
+        self._remove_excluded_skills(backup_before_write, log)
         if not all_skills:
             return
 
@@ -315,6 +330,14 @@ class AgentSkillsSync:
 
             # Propagate master → all frameworks
             for fw_id, fw in self.frameworks.items():
+                if skill_name in self._excluded_skills_for_framework(fw_id):
+                    dst = fw["path"] / skill_name
+                    if dst.exists() or dst.is_symlink():
+                        if backup_before_write:
+                            self._backup_skill_dir(dst, fw_id)
+                        self._remove_existing_path(dst)
+                        log(f"Excluded {skill_name} from {fw_id} ({dst})")
+                    continue
                 if fw_id == "antigravity-cli":
                     ensure_antigravity_cli_plugin()
                 dst = fw["path"] / skill_name
@@ -356,6 +379,32 @@ class AgentSkillsSync:
 
         return {"deleted": deleted, "not_found": not_found}
 
+    def _repo_for_framework(self, fw_id):
+        if not fw_id.startswith("repo:") or fw_id not in self.frameworks:
+            return None
+        path = self.frameworks[fw_id]["path"]
+        if path.name == "skills" and path.parent.name == ".claude":
+            return path.parent.parent
+        return None
+
+    def _excluded_skills_for_framework(self, fw_id):
+        return self.exclusions.for_target(
+            "skills",
+            fw_id,
+            self._repo_for_framework(fw_id),
+        )
+
+    def _remove_excluded_skills(self, backup_before_write, log):
+        for fw_id, fw in self.frameworks.items():
+            for skill_name in self._excluded_skills_for_framework(fw_id):
+                skill_path = fw["path"] / skill_name
+                if not (skill_path.exists() or skill_path.is_symlink()):
+                    continue
+                if backup_before_write:
+                    self._backup_skill_dir(skill_path, fw_id)
+                if self._remove_existing_path(skill_path):
+                    log(f"Excluded {skill_name} from {fw_id} ({skill_path})")
+
     def get_watch_paths_and_hashes(self):
         """
         Return dict of {path: hash} for all skill dirs we monitor.
@@ -373,8 +422,24 @@ class AgentSkillsSync:
                         result[item] = h
 
         add_skill_hashes(self.master_skills_dir)
-        for fw in self.frameworks.values():
-            add_skill_hashes(fw["path"])
+        for fw_id, fw in self.frameworks.items():
+            excluded = self._excluded_skills_for_framework(fw_id)
+            if not excluded:
+                add_skill_hashes(fw["path"])
+                continue
+            if not fw["path"].exists():
+                continue
+            for skill_name in excluded:
+                excluded_path = fw["path"] / skill_name
+                if excluded_path.exists() or excluded_path.is_symlink():
+                    result[excluded_path] = "excluded-present"
+            for item in fw["path"].iterdir():
+                if item.name in excluded:
+                    continue
+                if item.is_dir() and self._is_valid_skill_dir(item):
+                    h = self._skill_dir_hash(item)
+                    if h:
+                        result[item] = h
 
         return result
 

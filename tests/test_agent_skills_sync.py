@@ -63,6 +63,26 @@ def test_is_valid_skill_dir_rejects_missing_frontmatter():
         assert sync._is_valid_skill_dir(no_frontmatter) is False
 
 
+def test_is_valid_skill_dir_rejects_empty_description():
+    """Reject SKILL.md with present but empty description metadata."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base = Path(tmpdir)
+        empty_desc = base / "canvas"
+        empty_desc.mkdir()
+        (empty_desc / "SKILL.md").write_text(
+            "---\nname: canvas\ndescription: ''\n---\n# Canvas\n"
+        )
+        block_desc = base / "block-desc"
+        block_desc.mkdir()
+        (block_desc / "SKILL.md").write_text(
+            "---\nname: block-desc\ndescription: >\n  Valid block description.\n---\n# Skill\n"
+        )
+
+        sync = AgentSkillsSync(config_dir=base / "config")
+        assert sync._is_valid_skill_dir(empty_desc) is False
+        assert sync._is_valid_skill_dir(block_desc) is True
+
+
 def test_sync_does_not_promote_newer_invalid_skill_over_valid_source():
     """A newer zero-byte SKILL.md must not overwrite a valid installed skill."""
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -137,6 +157,65 @@ def test_sync_propagates_skill_from_one_framework():
         assert (sync.master_skills_dir / "my-skill" / "SKILL.md").exists()
         assert (claude_skills / "my-skill" / "SKILL.md").exists()
         assert (codex_skills / "my-skill" / "SKILL.md").exists()
+
+
+def test_sync_removes_excluded_skill_from_target():
+    """Excluded skills are deleted from blocked targets and kept elsewhere."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = Path(tmpdir) / "config"
+        cfg.mkdir()
+        cursor_skills = cfg / "cursor" / "skills"
+        codex_skills = cfg / "codex" / "skills"
+        agents_skills = cfg / "agents" / "skills"
+        cursor_skills.mkdir(parents=True)
+        codex_skills.mkdir(parents=True)
+        agents_skills.mkdir(parents=True)
+        (cfg / "excludes.json").write_text(
+            '{"skills": {"agents": {"codex": ["canvas"], "agents": ["canvas"]}}}'
+        )
+
+        sync = AgentSkillsSync(config_dir=cfg)
+        sync.frameworks = {
+            "cursor": {"name": "Cursor", "path": cursor_skills, "description": ""},
+            "codex": {"name": "Codex", "path": codex_skills, "description": ""},
+            "agents": {"name": "Shared", "path": agents_skills, "description": ""},
+        }
+
+        _create_skill(sync.master_skills_dir, "canvas", "Cursor canvas only")
+        _create_skill(cursor_skills, "canvas", "Cursor canvas only")
+        _create_skill(codex_skills, "canvas", "Cursor canvas only")
+        _create_skill(agents_skills, "canvas", "Cursor canvas only")
+
+        logs = []
+        sync.sync(log_callback=logs.append, backup_before_write=False, direction="push")
+
+        assert (cursor_skills / "canvas" / "SKILL.md").exists()
+        assert not (codex_skills / "canvas").exists()
+        assert not (agents_skills / "canvas").exists()
+        assert any("Excluded canvas from codex" in line for line in logs)
+
+
+def test_repo_local_excludes_remove_repo_skill():
+    """Repo-local excludes apply to repo skill targets."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = Path(tmpdir) / "config"
+        cfg.mkdir()
+        repo = Path(tmpdir) / "repo"
+        repo_skills = repo / ".claude" / "skills"
+        repo_skills.mkdir(parents=True)
+        (repo / ".agent-rules-sync-excludes.json").write_text('{"skills": ["local-skip"]}')
+
+        sync = AgentSkillsSync(config_dir=cfg)
+        sync.frameworks = {
+            "repo:repo": {"name": "Repo", "path": repo_skills, "description": ""},
+        }
+
+        _create_skill(sync.master_skills_dir, "local-skip", "Skip in this repo")
+        _create_skill(repo_skills, "local-skip", "Skip in this repo")
+
+        sync.sync(backup_before_write=False, direction="push")
+
+        assert not (repo_skills / "local-skip").exists()
 
 
 def test_sync_union_from_multiple_sources():

@@ -27,6 +27,7 @@ import re
 import toml
 
 from agent_antigravity_cli import ensure_plugin as ensure_antigravity_cli_plugin
+from agent_exclusions import ExclusionRules
 
 class AgentMcpSync:
     """Manages synchronization of MCP server configurations."""
@@ -37,11 +38,12 @@ class AgentMcpSync:
         self.master_file = self.config_dir / "mcp.json"
         self.backup_dir = self.config_dir / "mcp_backups"
         self.backup_dir.mkdir(exist_ok=True)
+        self.exclusions = ExclusionRules(self.config_dir)
 
         self.global_sources = {
             "claude-code": {
                 "name": "Claude Code",
-                "path": Path.home() / ".claude" / ".mcp.json",
+                "path": Path.home() / ".claude.json",
             },
             "cursor": {
                 "name": "Cursor",
@@ -78,6 +80,7 @@ class AgentMcpSync:
 
         self.repo_paths = []
         self._load_repo_paths()
+        self.plugin_mcp_paths = self._discover_plugin_mcp_paths()
 
     def _get_claude_desktop_path(self) -> Path:
         import sys
@@ -100,6 +103,19 @@ class AgentMcpSync:
                     self.repo_paths.append(repo)
         except Exception:
             pass
+
+    def _discover_plugin_mcp_paths(self) -> list[Path]:
+        plugin_root = Path(__file__).resolve().parent / "plugins"
+        if not plugin_root.exists():
+            return []
+        return sorted(plugin_root.glob("*/.mcp.json"))
+
+    def _repo_mcp_paths(self, repo: Path) -> list[Path]:
+        return [
+            repo / ".mcp.json",
+            repo / ".cursor" / "mcp.json",
+            repo / ".gemini" / "mcp.json",
+        ]
 
     def _to_opencode_format(self, servers: dict) -> dict:
         """Convert internal format to OpenCode's mcp format."""
@@ -268,6 +284,36 @@ class AgentMcpSync:
         except Exception:
             return {}
 
+    def _get_plugin_mcp_servers(self, path: Path) -> dict:
+        """Extract plugin MCP servers and resolve relative paths for global use."""
+        servers = self._get_mcp_servers(path)
+        base_dir = path.parent
+        result = {}
+        for name, cfg in servers.items():
+            if not isinstance(cfg, dict):
+                continue
+            new_cfg = dict(cfg)
+            cwd = new_cfg.pop("cwd", None)
+            cwd_path = Path(cwd) if cwd else base_dir
+            if not cwd_path.is_absolute():
+                cwd_path = (base_dir / cwd_path).resolve()
+
+            args = new_cfg.get("args")
+            if isinstance(args, list):
+                new_cfg["args"] = [
+                    str((cwd_path / arg).resolve())
+                    if isinstance(arg, str) and (arg.startswith("./") or arg.startswith("../"))
+                    else arg
+                    for arg in args
+                ]
+
+            command = new_cfg.get("command")
+            if isinstance(command, str) and (command.startswith("./") or command.startswith("../")):
+                new_cfg["command"] = str((cwd_path / command).resolve())
+
+            result[name] = new_cfg
+        return result
+
     def _file_hash(self, path: Path) -> str | None:
         if not path.exists():
             return None
@@ -296,13 +342,13 @@ class AgentMcpSync:
                 return False
 
         for repo in self.repo_paths:
-            for path in [
-                repo / ".mcp.json",
-                repo / ".cursor" / "mcp.json",
-                repo / ".gemini" / "mcp.json",
-            ]:
+            for path in self._repo_mcp_paths(repo):
                 if path.exists() and path.stat().st_mtime > master_mtime:
                     return False
+
+        for path in self.plugin_mcp_paths:
+            if path.exists() and path.stat().st_mtime > master_mtime:
+                return False
 
         return True
 
@@ -330,15 +376,15 @@ class AgentMcpSync:
                     for name, cfg in servers.items():
                         all_servers[name] = cfg
             for repo in self.repo_paths:
-                for path in [
-                    repo / ".mcp.json",
-                    repo / ".cursor" / "mcp.json",
-                    repo / ".gemini" / "mcp.json",
-                ]:
+                for path in self._repo_mcp_paths(repo):
                     if path.exists():
                         servers = self._get_mcp_servers(path)
                         for name, cfg in servers.items():
                             all_servers[name] = cfg
+            for path in self.plugin_mcp_paths:
+                servers = self._get_plugin_mcp_servers(path)
+                for name, cfg in servers.items():
+                    all_servers[name] = cfg
         else:
             # Bidirectional — mtime decides who wins
             if self._master_is_newest():
@@ -357,15 +403,15 @@ class AgentMcpSync:
                         for name, cfg in servers.items():
                             all_servers[name] = cfg
                 for repo in self.repo_paths:
-                    for path in [
-                        repo / ".mcp.json",
-                        repo / ".cursor" / "mcp.json",
-                        repo / ".gemini" / "mcp.json",
-                    ]:
+                    for path in self._repo_mcp_paths(repo):
                         if path.exists():
                             servers = self._get_mcp_servers(path)
                             for name, cfg in servers.items():
                                 all_servers[name] = cfg
+                for path in self.plugin_mcp_paths:
+                    servers = self._get_plugin_mcp_servers(path)
+                    for name, cfg in servers.items():
+                        all_servers[name] = cfg
 
         # 3. Save to master
         new_master = {"mcpServers": all_servers}
@@ -388,16 +434,11 @@ class AgentMcpSync:
             self._update_target(path, all_servers, label, log, info)
 
         for repo in self.repo_paths:
-            repo_mcp_paths = [
-                repo / ".mcp.json",
-                repo / ".cursor" / "mcp.json",
-                repo / ".gemini" / "mcp.json",
-            ]
-            for path in repo_mcp_paths:
+            for path in self._repo_mcp_paths(repo):
                 if path.exists():
-                    self._update_target(path, all_servers, f"repo:{repo.name}", log)
+                    self._update_target(path, all_servers, f"repo:{repo.name}", log, repo=repo)
 
-    def _update_target(self, path: Path, servers: dict, label: str, log, info: dict = None):
+    def _update_target(self, path: Path, servers: dict, label: str, log, info: dict = None, repo: Path = None):
         if not path.parent.exists():
             try:
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -413,9 +454,16 @@ class AgentMcpSync:
 
         new_data = dict(current_data)
         mcp_key = info.get("mcp_key", "mcpServers") if info else "mcpServers"
-        output_servers = servers
+        excluded = self.exclusions.for_target("mcp", label, repo)
+        target_servers = {
+            name: cfg for name, cfg in servers.items() if name not in excluded
+        }
+        if excluded:
+            log(f"[mcp] Excluding {len(excluded)} server(s) from {label}: {', '.join(sorted(excluded))}")
+
+        output_servers = target_servers
         if info and "from_internal" in info:
-            output_servers = info["from_internal"](servers)
+            output_servers = info["from_internal"](target_servers)
         new_data[mcp_key] = output_servers
 
         new_json = json.dumps(new_data, indent=2) + "\n"
@@ -442,14 +490,13 @@ class AgentMcpSync:
                 hashes[path] = self._file_hash(path)
         
         for repo in self.repo_paths:
-            repo_mcp_paths = [
-                repo / ".mcp.json",
-                repo / ".cursor" / "mcp.json",
-                repo / ".gemini" / "mcp.json"
-            ]
-            for path in repo_mcp_paths:
+            for path in self._repo_mcp_paths(repo):
                 if path.exists():
                     hashes[path] = self._file_hash(path)
+
+        for path in self.plugin_mcp_paths:
+            if path.exists():
+                hashes[path] = self._file_hash(path)
         return hashes
 
     def mcp_changed(self, old_hashes: dict) -> bool:
