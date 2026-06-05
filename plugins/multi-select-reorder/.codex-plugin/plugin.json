@@ -1,0 +1,38 @@
+{
+  "name": "multi-select-reorder",
+  "version": "0.1.0",
+  "description": "Ad hoc web UI for multi-select choices with drag-and-drop reordering.",
+  "author": {
+    "name": "Dhruv Anand"
+  },
+  "homepage": "https://github.com/dhruv-anand-aintech/agent-rules-sync",
+  "repository": "https://github.com/dhruv-anand-aintech/agent-rules-sync",
+  "license": "MIT",
+  "keywords": [
+    "multi-select",
+    "reorder",
+    "web",
+    "selection",
+    "mcp",
+    "codex"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Multi Select Reorder",
+    "shortDescription": "Multi-select and reorder choices",
+    "longDescription": "Multi Select Reorder opens a short-lived local web page for checkbox selection and drag-and-drop ordering, then returns the submitted result to the agent through MCP.",
+    "developerName": "Dhruv Anand",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read"
+    ],
+    "websiteURL": "https://github.com/dhruv-anand-aintech/agent-rules-sync",
+    "defaultPrompt": [
+      "Use multi_select_reorder to choose and order these options"
+    ],
+    "brandColor": "#2563EB",
+    "screenshots": []
+  }
+}

@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from multi_select_reorder.selector import load_options, run_selector
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Multi-select reorder option selector")
+    parser.add_argument("--mode", choices=["single", "multi", "rank"], default="single")
+    parser.add_argument("--title", default=None)
+    parser.add_argument("--input", help="JSON or newline-delimited options file. Defaults to stdin.")
+    parser.add_argument(
+        "--options-json",
+        help=(
+            "Inline JSON options. Accepts either an array or an object with title/options. "
+            "Example: '[{\"id\":\"a\",\"label\":\"A\"},\"B\"]'"
+        ),
+    )
+    parser.add_argument(
+        "--option",
+        action="append",
+        default=[],
+        help="Inline option label. Repeat for multiple options. Ignored when --options-json is set.",
+    )
+    parser.add_argument("--tty", default=None, help="TTY path to use for the UI, e.g. /dev/tty.")
+    args = parser.parse_args()
+
+    try:
+        inline_data = args.options_json
+        if inline_data is None and args.option:
+            inline_data = json.dumps(args.option)
+        inferred_title, options = load_options(args.input, inline_data=inline_data)
+        result = run_selector(options, mode=args.mode, title=args.title or inferred_title, tty_path=args.tty)
+    except Exception as exc:
+        print(json.dumps({"error": str(exc), "cancelled": True}), file=sys.stdout)
+        return 1
+
+    print(json.dumps(result, indent=2))
+    return 0 if not result.get("cancelled") else 130
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

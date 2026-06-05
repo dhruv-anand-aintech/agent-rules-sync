@@ -1,0 +1,12 @@
+{
+  "name": "multi-select-reorder",
+  "version": "0.1.0",
+  "description": "Ad hoc web UI for multi-select choices with drag-and-drop reordering.",
+  "author": {
+    "name": "Dhruv Anand"
+  },
+  "homepage": "https://github.com/dhruv-anand-aintech/agent-rules-sync",
+  "repository": "https://github.com/dhruv-anand-aintech/agent-rules-sync",
+  "license": "MIT",
+  "skills": "./skills/"
+}

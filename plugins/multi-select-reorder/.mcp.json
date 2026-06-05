@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "multi-select-reorder-mcp": {
+      "command": "python3",
+      "args": [
+        "./multi_select_reorder/mcp_server.py"
+      ],
+      "cwd": ".",
+      "startup_timeout_sec": 120
+    }
+  }
+}
