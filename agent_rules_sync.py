@@ -1226,6 +1226,14 @@ class AgentRulesSync:
 
         print(f"{'='*70}\n")
 
+    def _is_termux(self):
+        """Detect Termux/Android environment."""
+        return (
+            sys.platform == "linux" and
+            os.path.isdir("/data/data/com.termux/files/usr") and
+            "TERMUX_VERSION" in os.environ
+        )
+
     def daemon_start(self):
         """Start daemon (cross-platform)."""
         # Check if already running
@@ -1251,6 +1259,9 @@ class AgentRulesSync:
         if sys.platform == "win32":
             # Windows: Run in background thread
             self._daemon_start_windows()
+        elif self._is_termux():
+            # Termux/Android: Use nohup (fork/setsid not reliable)
+            self._daemon_start_termux()
         else:
             # Unix/Linux/Mac: Use fork
             self._daemon_start_unix()
@@ -1286,6 +1297,28 @@ class AgentRulesSync:
         # Run watch
         self.watch(interval=3)
         sys.exit(0)
+
+    def _daemon_start_termux(self):
+        """Start daemon on Termux/Android using nohup."""
+        import subprocess
+        log_file = self.config_dir / "daemon.log"
+        python_exe = sys.executable
+        # Use nohup to keep running after shell exits
+        cmd = [
+            "nohup", python_exe, "-m", "agent_rules_sync", "watch"
+        ]
+        # Start detached process
+        proc = subprocess.Popen(
+            cmd,
+            stdout=open(log_file, "a"),
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        # Save PID
+        with open(self.pid_file, "w") as f:
+            f.write(str(proc.pid))
+        print(f"✓ Daemon started (PID: {proc.pid}) — Termux nohup mode")
 
     def _daemon_start_windows(self):
         """Start daemon on Windows using background thread."""
