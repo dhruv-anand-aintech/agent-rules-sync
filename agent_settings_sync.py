@@ -22,6 +22,8 @@ import hashlib
 import shutil
 from pathlib import Path
 
+from agent_exclusions import ExclusionRules
+
 
 # Top-level keys that are purely machine-local — omit from repo copy
 DEFAULT_STRIP_KEYS = [
@@ -74,6 +76,7 @@ class AgentSettingsSync:
         self.config_dir = config_dir or (Path.home() / ".config" / "agent-rules-sync")
         self._load_config()
         self._load_repo_paths()
+        self.exclusions = ExclusionRules(self.config_dir)
 
     def _load_config(self):
         cfg_file = self.config_dir / "settings_sync.json"
@@ -160,7 +163,7 @@ class AgentSettingsSync:
                     dst.chmod(0o755)
                     log(f"[settings] {repo.name}: copied hook script {script_name}")
 
-    def _make_portable_hooks(self, hooks: dict, repo: Path, source_info: dict, log) -> dict | None:
+    def _make_portable_hooks(self, hooks: dict, repo: Path, source_info: dict, log, agent_name: str = "") -> dict | None:
         """
         Rewrite hooks block for the repo.
         """
@@ -170,6 +173,7 @@ class AgentSettingsSync:
         self._hook_scripts_to_copy = []
         portable = {}
         hooks_dir = source_info["hooks_dir"]
+        excluded_hooks = self.exclusions.for_target("hooks", agent_name, repo) if agent_name else set()
 
         for event, matchers in hooks.items():
             portable_matchers = []
@@ -184,17 +188,24 @@ class AgentSettingsSync:
                     if new_cmd is None:
                         log(f"[settings] {repo.name}: skipping non-portable hook in {event}: {cmd[:60]}")
                         continue
-                        
-                    # Track any hook scripts to copy
+
+                    # Extract script filename and stem for copy-tracking and exclusion checks
+                    script_file = None
+                    script_stem = None
                     for variant in [str(hooks_dir) + "/", "~" + str(hooks_dir).replace(str(Path.home()), "") + "/"]:
                         if variant in cmd:
-                            parts = cmd.split(variant)
-                            if len(parts) > 1:
-                                script_name = parts[1].split()[0].replace('"', '').replace("'", "")
-                                if script_name not in self._hook_scripts_to_copy:
-                                    self._hook_scripts_to_copy.append(script_name)
+                            raw_arg = cmd.split(variant)[1].split()[0].strip("'\"")
+                            script_file = raw_arg
+                            script_stem = Path(raw_arg).stem
+                            if script_file not in self._hook_scripts_to_copy:
+                                self._hook_scripts_to_copy.append(script_file)
                             break
-                            
+
+                    # Skip hook if its script stem is in the exclusion list for this agent
+                    if script_stem and script_stem in excluded_hooks:
+                        log(f"[settings] {repo.name}: excluding hook '{script_stem}' from {agent_name} ({event})")
+                        continue
+
                     rewritten = dict(hook)
                     rewritten["command"] = new_cmd
                     portable_hooks_list.append(rewritten)
@@ -209,7 +220,7 @@ class AgentSettingsSync:
 
         return portable if portable else None
 
-    def _make_portable(self, settings: dict, repo: Path, source_info: dict, log) -> dict:
+    def _make_portable(self, settings: dict, repo: Path, source_info: dict, log, agent_name: str = "") -> dict:
         """Build a portable settings dict for the given repo."""
         result = {}
         for key, value in settings.items():
@@ -232,7 +243,7 @@ class AgentSettingsSync:
                         portable_perms[perm_key] = perm_val
                 result["permissions"] = portable_perms
             elif key == "hooks":
-                portable_hooks = self._make_portable_hooks(value, repo, source_info, log)
+                portable_hooks = self._make_portable_hooks(value, repo, source_info, log, agent_name)
                 if portable_hooks:
                     result["hooks"] = portable_hooks
             else:
@@ -262,7 +273,7 @@ class AgentSettingsSync:
 
             for repo in self.repo_paths:
                 self._hook_scripts_to_copy = []
-                portable = self._make_portable(raw, repo, info, log)
+                portable = self._make_portable(raw, repo, info, log, agent_name=name)
                 portable_json = json.dumps(portable, indent=2) + "\n"
 
                 dest = repo / info["repo_rel_path"]
