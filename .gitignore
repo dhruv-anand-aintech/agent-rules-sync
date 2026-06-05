@@ -37,3 +37,6 @@ wheels/
 .env
 .env.local
 .colgrep/
+tmp/
+.agents/audit/
+.agents/skills/
