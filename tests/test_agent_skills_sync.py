@@ -282,6 +282,28 @@ def test_sync_handles_skill_with_extra_files():
         assert (dst_skills / "rich-skill" / "references" / "api.md").exists()
 
 
+def test_sync_skips_identical_skill_without_backup():
+    """Identical target skill should not be backed up or rewritten."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = Path(tmpdir) / "config"
+        cfg.mkdir()
+        dst_skills = cfg / "dst" / "skills"
+
+        sync = AgentSkillsSync(config_dir=cfg)
+        sync.frameworks = {
+            "dst": {"name": "Dst", "path": dst_skills, "description": ""},
+        }
+
+        _create_skill(sync.master_skills_dir, "stable-skill", "Same content")
+        sync.sync(backup_before_write=True, direction="push")
+
+        logs = []
+        sync.sync(log_callback=logs.append, backup_before_write=True, direction="push")
+
+        assert not any("Copied stable-skill" in line for line in logs)
+        assert not any(sync.backup_dir.iterdir())
+
+
 def test_skills_changed_detection():
     """Change detection works for skill modifications."""
     with tempfile.TemporaryDirectory() as tmpdir:

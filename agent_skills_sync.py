@@ -22,6 +22,7 @@ are NOT synced - they are managed by each framework's plugin/marketplace system.
 """
 
 import hashlib
+import filecmp
 import os
 import shutil
 from datetime import datetime
@@ -281,6 +282,54 @@ class AgentSkillsSync:
                 log_callback(f"Error copying {src.name}: {e}")
             return False
 
+    def _skill_dirs_match(self, src, dst):
+        """Return True when two skill dirs have same file tree and bytes."""
+        if src == dst:
+            return True
+        if not src.exists() or not dst.exists():
+            return False
+        if not src.is_dir() or not dst.is_dir():
+            return False
+
+        def files_by_rel(root):
+            files = {}
+            for path in root.rglob("*"):
+                rel = path.relative_to(root)
+                if any(p.startswith(".") or p == "__pycache__" for p in rel.parts):
+                    continue
+                if path.is_file():
+                    files[rel] = path
+                elif path.is_dir():
+                    continue
+                else:
+                    return None
+            return files
+
+        src_files = files_by_rel(src)
+        dst_files = files_by_rel(dst)
+        if src_files is None or dst_files is None:
+            return False
+        if set(src_files) != set(dst_files):
+            return False
+        for rel, src_file in src_files.items():
+            dst_file = dst_files[rel]
+            try:
+                if src_file.stat().st_size != dst_file.stat().st_size:
+                    return False
+                if not filecmp.cmp(src_file, dst_file, shallow=False):
+                    return False
+            except OSError:
+                return False
+        return True
+
+    def _sync_skill_to(self, src, dst, framework_id, log, backup_before_write):
+        """Copy a skill only when destination content differs."""
+        if self._skill_dirs_match(src, dst):
+            return True
+        if dst.exists() and backup_before_write:
+            self._backup_skill_dir(dst, framework_id)
+        return self._copy_skill(src, dst, log)
+
     def sync(self, log_callback=None, backup_before_write=True, direction="bidirectional"):
         """
         Sync skills across all frameworks.
@@ -311,9 +360,9 @@ class AgentSkillsSync:
                 src_path, _ = result
                 master_dst = self.master_skills_dir / skill_name
                 if src_path != master_dst:
-                    if backup_before_write and master_dst.exists():
-                        self._backup_skill_dir(master_dst, "master")
-                    self._copy_skill(src_path, master_dst, log)
+                    self._sync_skill_to(
+                        src_path, master_dst, "master", log, backup_before_write
+                    )
                 continue  # don't push to frameworks
             else:  # bidirectional
                 result = self._get_newest_skill_source(skill_name)
@@ -324,9 +373,9 @@ class AgentSkillsSync:
                 # Write to master first
                 master_dst = self.master_skills_dir / skill_name
                 if src_path != master_dst:
-                    if backup_before_write and master_dst.exists():
-                        self._backup_skill_dir(master_dst, "master")
-                    self._copy_skill(src_path, master_dst, log)
+                    self._sync_skill_to(
+                        src_path, master_dst, "master", log, backup_before_write
+                    )
 
             # Propagate master → all frameworks
             for fw_id, fw in self.frameworks.items():
@@ -341,10 +390,12 @@ class AgentSkillsSync:
                 if fw_id == "antigravity-cli":
                     ensure_antigravity_cli_plugin()
                 dst = fw["path"] / skill_name
-                if dst.exists() and backup_before_write:
-                    self._backup_skill_dir(dst, fw_id)
-                self._copy_skill(
-                    self.master_skills_dir / skill_name, dst, log
+                self._sync_skill_to(
+                    self.master_skills_dir / skill_name,
+                    dst,
+                    fw_id,
+                    log,
+                    backup_before_write,
                 )
 
     def delete_skill(self, skill_name, backup=True, log_callback=None):
