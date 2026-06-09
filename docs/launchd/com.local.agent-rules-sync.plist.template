@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{{LAUNCHD_LABEL}}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{PYTHON_BIN}}</string>
+        <string>{{RUN_WATCH_SCRIPT}}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>WorkingDirectory</key>
+    <string>{{REPO_ROOT}}</string>
+    <key>StandardOutPath</key>
+    <string>{{STDOUT_LOG}}</string>
+    <key>StandardErrorPath</key>
+    <string>{{STDERR_LOG}}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{{PATH_VALUE}}</string>
+        <key>PYTHONPATH</key>
+        <string>{{REPO_ROOT}}</string>
+        <key>ARSRULES_DISK_LIMIT_BYTES</key>
+        <string>{{DISK_LIMIT_BYTES}}</string>
+        <key>ARSRULES_LAUNCHD_LABEL</key>
+        <string>{{LAUNCHD_LABEL}}</string>
+    </dict>
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

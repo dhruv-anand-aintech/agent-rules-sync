@@ -60,6 +60,9 @@ launchctl load ~/Library/LaunchAgents/com.local.agent-rules-sync.plist
 launchctl unload ~/Library/LaunchAgents/com.local.agent-rules-sync.plist
 ```
 
+To use a versioned local template (including the 5GiB disk hard limit env guard), see:
+[docs/launchd/README.md](docs/launchd/README.md).
+
 ### Linux (systemd)
 
 **Service Type:** systemd user service
