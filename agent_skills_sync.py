@@ -46,6 +46,7 @@ class AgentSkillsSync:
         self.master_skills_dir.mkdir(exist_ok=True)
         self.backup_dir = self.config_dir / "skill_backups"
         self.backup_dir.mkdir(exist_ok=True)
+        self._skill_backup_hashes = {}
         self.exclusions = ExclusionRules(self.config_dir)
 
         # Resolve CODEX_HOME for Codex skills path
@@ -202,6 +203,66 @@ class AgentSkillsSync:
                 hasher.update(f"{st.st_mtime_ns}:{st.st_size}".encode())
         return hasher.hexdigest()
 
+    def _skill_dir_content_hash(self, skill_path):
+        """Compute a deterministic content hash for a skill directory."""
+        if not skill_path.exists() or not skill_path.is_dir():
+            return None
+
+        hasher = hashlib.sha256()
+
+        def hash_file(file_path):
+            with open(file_path, "rb") as f:
+                while True:
+                    chunk = f.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    hasher.update(chunk)
+
+        for path in sorted(
+            skill_path.rglob("*"), key=lambda p: str(p.relative_to(skill_path))
+        ):
+            rel = path.relative_to(skill_path)
+            if any(p.startswith(".") or p == "__pycache__" for p in rel.parts):
+                continue
+            if path.is_file():
+                hasher.update(f"FILE:{rel.as_posix()}\\n".encode())
+                hash_file(path)
+            elif path.is_dir():
+                hasher.update(f"DIR:{rel.as_posix()}\\n".encode())
+            elif path.is_symlink():
+                hasher.update(f"SYMLINK:{rel.as_posix()}".encode())
+                try:
+                    hasher.update(os.readlink(path).encode())
+                except OSError:
+                    pass
+            else:
+                return None
+        return hasher.hexdigest()
+
+    def _skill_backup_cache_key(self, framework_id, skill_name):
+        return f"{framework_id}:{skill_name}"
+
+    def _load_skill_backup_hashes(self, framework_id, skill_name):
+        key = self._skill_backup_cache_key(framework_id, skill_name)
+        if key in self._skill_backup_hashes:
+            return self._skill_backup_hashes[key]
+
+        hashes = set()
+        for backup_path in self.backup_dir.glob(f"{framework_id}_{skill_name}_*"):
+            if not backup_path.is_dir():
+                continue
+            backup_hash = self._skill_dir_content_hash(backup_path)
+            if backup_hash:
+                hashes.add(backup_hash)
+
+        self._skill_backup_hashes[key] = hashes
+        return hashes
+
+    def _has_skill_backup_hash(self, framework_id, skill_name, skill_hash):
+        if not skill_hash:
+            return False
+        return skill_hash in self._load_skill_backup_hashes(framework_id, skill_name)
+
     def _get_newest_skill_source(self, skill_name):
         """
         Return (path, mtime) of the skill dir with newest SKILL.md.
@@ -229,12 +290,18 @@ class AgentSkillsSync:
         """Create timestamped backup of a skill directory."""
         if not skill_path.exists():
             return None
+        skill_name = skill_path.name
+        skill_hash = self._skill_dir_content_hash(skill_path)
+        if self._has_skill_backup_hash(framework_id, skill_name, skill_hash):
+            return None
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = self.backup_dir / f"{framework_id}_{skill_path.name}_{timestamp}"
+        backup_path = self.backup_dir / f"{framework_id}_{skill_name}_{timestamp}"
         try:
             if backup_path.exists():
                 shutil.rmtree(backup_path)
             shutil.copytree(skill_path, backup_path, symlinks=True)
+            if skill_hash:
+                self._load_skill_backup_hashes(framework_id, skill_name).add(skill_hash)
             return backup_path
         except Exception:
             return None
@@ -340,6 +407,11 @@ class AgentSkillsSync:
           "pull"          — frameworks → master only (aggregate, don't push back)
         """
         log = log_callback or (lambda _: None)
+        expect_backup = self.config_dir / "skill_backups"
+        if self.backup_dir.resolve() != expect_backup.resolve():
+            self.backup_dir = expect_backup
+            self.backup_dir.mkdir(exist_ok=True)
+            self._skill_backup_hashes = {}
 
         all_skills = self._get_all_skill_names()
         self._remove_excluded_skills(backup_before_write, log)

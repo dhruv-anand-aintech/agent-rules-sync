@@ -41,6 +41,57 @@ def test_extract_agent_rules_returns_empty():
     rules = sync._extract_agent_rules(content, "claude")
     assert rules == set()
 
+
+def test_backup_file_skips_duplicate_content():
+    """Identical rule content should only be backed up once."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config_dir = Path(tmpdir)
+        sync = AgentRulesSync()
+        sync.config_dir = config_dir
+        sync.backup_dir = config_dir / "backups"
+        sync.backup_dir.mkdir(exist_ok=True)
+        sync._rule_backup_hashes = {}
+
+        source = config_dir / "file.md"
+        source.write_text("shared line\\n", encoding="utf-8")
+
+        first_backup = sync._backup_file(source, "agent")
+        assert first_backup is not None
+        assert first_backup.exists()
+        assert len(list(sync.backup_dir.iterdir())) == 1
+
+        assert sync._backup_file(source, "agent") is None
+        assert len(list(sync.backup_dir.iterdir())) == 1
+
+
+def test_sync_aborts_when_disk_quota_exceeded(monkeypatch, tmp_path):
+    """Quota checks should stop syncs and mark the daemon stop condition."""
+    monkeypatch.setenv("ARSRULES_DISK_LIMIT_BYTES", "1")
+
+    sync = AgentRulesSync()
+    sync.config_dir = tmp_path
+    sync.master_file = tmp_path / "RULES.md"
+    sync.backup_dir = tmp_path / "backups"
+    sync.backup_dir.mkdir(exist_ok=True)
+
+    monkeypatch.setattr(sync, "_directory_size_bytes", lambda _path: 2)
+    unload_called = []
+    alert_called = []
+
+    monkeypatch.setattr(sync, "_unload_launchd_daemon", lambda: unload_called.append(True))
+    monkeypatch.setattr(
+        sync,
+        "_show_disk_alert",
+        lambda message, used_bytes, limit_bytes: alert_called.append(
+            (message, used_bytes, limit_bytes)
+        ),
+    )
+
+    assert sync._check_disk_quota() is True
+    assert sync.stop_event.is_set()
+    assert unload_called == [True]
+    assert len(alert_called) == 1
+
 def test_build_file_content():
     sync = AgentRulesSync()
     shared = {"- rule 1", "- rule 2"}

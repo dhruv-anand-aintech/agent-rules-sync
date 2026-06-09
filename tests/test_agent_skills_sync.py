@@ -2,6 +2,7 @@
 
 import tempfile
 from pathlib import Path
+import shutil
 
 import pytest
 
@@ -302,6 +303,43 @@ def test_sync_skips_identical_skill_without_backup():
 
         assert not any("Copied stable-skill" in line for line in logs)
         assert not any(sync.backup_dir.iterdir())
+
+
+def test_backup_skips_duplicate_skill_snapshot():
+    """Duplicate destination snapshot should not create another backup before overwrite."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = Path(tmpdir) / "config"
+        cfg.mkdir()
+        dst_skills = cfg / "dst" / "skills"
+
+        sync = AgentSkillsSync(config_dir=cfg)
+        sync.frameworks = {
+            "dst": {"name": "Dst", "path": dst_skills, "description": ""},
+        }
+
+        _create_skill(sync.master_skills_dir, "dup-skill", "source v1")
+        _create_skill(dst_skills, "dup-skill", "dst v0")
+
+        # First overwrite creates one backup of dst v0 and syncs source v1.
+        sync.sync(backup_before_write=True, direction="push")
+        assert any("dst_dup-skill_" in p.name for p in sync.backup_dir.iterdir())
+        first_backup_count = len(list(sync.backup_dir.iterdir()))
+        assert first_backup_count == 1
+        assert (dst_skills / "dup-skill" / "SKILL.md").read_text().find("source v1") != -1
+
+        # Restore destination to the previous snapshot from its backup.
+        restored_backup = next(sync.backup_dir.glob("dst_dup-skill_*"))
+        dst_path = dst_skills / "dup-skill"
+        shutil.rmtree(dst_path)
+        shutil.copytree(restored_backup, dst_path, symlinks=True)
+
+        # Source changes again; destination matches existing backup snapshot.
+        _create_skill(sync.master_skills_dir, "dup-skill", "source v2")
+        sync.sync(backup_before_write=True, direction="push")
+
+        # Backup directory should still be one (no duplicate copy written).
+        assert len(list(sync.backup_dir.iterdir())) == first_backup_count
+        assert (dst_skills / "dup-skill" / "SKILL.md").read_text().find("source v2") != -1
 
 
 def test_skills_changed_detection():

@@ -26,6 +26,13 @@ def install_macos():
         <string>agent_rules_sync</string>
         <string>watch</string>
     </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>ARSRULES_DISK_LIMIT_BYTES</key>
+        <string>5368709120</string>
+        <key>ARSRULES_LAUNCHD_LABEL</key>
+        <string>com.local.agent-rules-sync</string>
+    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>

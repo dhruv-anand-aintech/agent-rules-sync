@@ -29,6 +29,7 @@ import time
 import hashlib
 import threading
 import queue
+import subprocess
 from pathlib import Path
 from datetime import datetime
 import shutil
@@ -45,6 +46,9 @@ from agent_antigravity_cli import ensure_plugin as ensure_antigravity_cli_plugin
 class AgentRulesSync:
     """Manages synchronization of rules across AI coding assistants."""
 
+    DEFAULT_DISK_LIMIT_BYTES = 5 * 1024 * 1024 * 1024
+    DISK_CHECK_INTERVAL_SECONDS = 2
+
     def __init__(self):
         """Initialize the sync manager with config in ~/.config/agent-rules-sync/"""
         # Store config in user's .config directory (hidden)
@@ -57,6 +61,7 @@ class AgentRulesSync:
         # Backup directory
         self.backup_dir = self.config_dir / "backups"
         self.backup_dir.mkdir(exist_ok=True)
+        self._rule_backup_hashes = {}
 
         # PID file for daemon mode
         self.pid_file = self.config_dir / "daemon.pid"
@@ -64,6 +69,8 @@ class AgentRulesSync:
 
         # Stop event for graceful Windows daemon shutdown
         self.stop_event = threading.Event()
+        self._last_disk_guard_check = 0.0
+        self._launchd_label = os.environ.get("ARSRULES_LAUNCHD_LABEL", "com.local.agent-rules-sync")
 
         # Skills sync (syncs skills across Cursor, Claude, Codex, Gemini, OpenCode)
         self.skills_sync = AgentSkillsSync(config_dir=self.config_dir)
@@ -441,15 +448,43 @@ class AgentRulesSync:
         with open(filepath, 'rb') as f:
             return hashlib.sha256(f.read()).hexdigest()
 
+    def _load_rule_backup_hashes(self, agent_name):
+        """Cache and return known hashes for backups of one target."""
+        if agent_name in self._rule_backup_hashes:
+            return self._rule_backup_hashes[agent_name]
+
+        hashes = set()
+        for backup_path in self.backup_dir.glob(f"{agent_name}_*"):
+            if not backup_path.is_file():
+                continue
+            backup_hash = self._get_file_hash(backup_path)
+            if backup_hash:
+                hashes.add(backup_hash)
+
+        self._rule_backup_hashes[agent_name] = hashes
+        return hashes
+
+    def _has_rule_backup_hash(self, agent_name, file_hash):
+        """Return True if this target already has a matching backup hash."""
+        if not file_hash:
+            return False
+        return file_hash in self._load_rule_backup_hashes(agent_name)
+
     def _backup_file(self, filepath, agent_name):
         """Create a backup of a file before modifying it."""
         if not filepath.exists():
             return None
+        file_hash = self._get_file_hash(filepath)
+        if self._has_rule_backup_hash(agent_name, file_hash):
+            return None
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_filename = f"{agent_name}_{timestamp}.md"
         backup_path = self.backup_dir / backup_filename
         try:
             shutil.copy2(filepath, backup_path)
+            if file_hash:
+                self._load_rule_backup_hashes(agent_name).add(file_hash)
             return backup_path
         except Exception:
             return None
@@ -574,6 +609,8 @@ class AgentRulesSync:
         - Union of all current rules (additions from any file)
         - Subtract any rules that were in previous state but removed from ANY file
         """
+        if self._check_disk_quota():
+            return
         try:
             # Tests (and future callers) may point config_dir at an isolated directory after
             # __init__; reload config + sub-syncers so we never use another dir's sync_state,
@@ -589,6 +626,7 @@ class AgentRulesSync:
             if self.backup_dir.resolve() != expect_backup.resolve():
                 self.backup_dir = expect_backup
                 self.backup_dir.mkdir(parents=True, exist_ok=True)
+                self._rule_backup_hashes = {}
 
             self._ensure_master_exists()
             self._migrate_from_old_version()
@@ -748,6 +786,7 @@ class AgentRulesSync:
                     )
                 except Exception as e:
                     self._log_error(f"MCP sync error: {e}")
+            self._check_disk_quota()
         except Exception as e:
             self._log_error(f"Sync error: {e}")
 
@@ -767,6 +806,107 @@ class AgentRulesSync:
             log_file.write_text(rotated, encoding="utf-8")
         except Exception:
             pass
+
+    def _fmt_bytes(self, value):
+        for unit in ("B", "KB", "MB", "GB", "TB"):
+            if value < 1024.0:
+                return f"{value:.2f} {unit}"
+            value /= 1024.0
+        return f"{value:.2f} PB"
+
+    def _directory_size_bytes(self, path):
+        """Return byte size for a directory tree, skipping symbolic links."""
+        if not path.exists():
+            return 0
+        total = 0
+        for root, _, files in os.walk(path):
+            for filename in files:
+                p = Path(root) / filename
+                try:
+                    if p.is_symlink():
+                        continue
+                    total += p.stat(follow_symlinks=False).st_size
+                except OSError:
+                    continue
+        return total
+
+    def _load_disk_quota_bytes(self):
+        try:
+            return max(1, int(os.environ.get("ARSRULES_DISK_LIMIT_BYTES", str(self.DEFAULT_DISK_LIMIT_BYTES))))
+        except (TypeError, ValueError):
+            return self.DEFAULT_DISK_LIMIT_BYTES
+
+    def _show_disk_alert(self, message, used_bytes, limit_bytes):
+        """Show a macOS notification and fallback to log if notification fails."""
+        safe_message = str(message).replace("\\", "\\\\").replace('"', '\\"')
+        script = (
+            'display notification "'
+            + safe_message
+            + '" with title "Agent Rules Sync"'
+            + ' subtitle "Used: '
+            + self._fmt_bytes(used_bytes)
+            + ' / '
+            + self._fmt_bytes(limit_bytes)
+            + '" sound name "Basso"'
+        )
+        try:
+            subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except Exception:
+            pass
+
+        self._log_error(f"Disk limit triggered: {message}")
+        self._log_message(f"Disk limit triggered: {message}")
+
+    def _unload_launchd_daemon(self):
+        """Unload launchd service for this daemon, if present."""
+        plist_path = Path.home() / "Library" / "LaunchAgents" / f"{self._launchd_label}.plist"
+        label = self._launchd_label
+
+        for cmd in (
+            ["launchctl", "bootout", f"gui/{os.getuid()}/{label}"],
+            ["launchctl", "unload", str(plist_path)],
+        ):
+            try:
+                subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=10,
+                )
+            except Exception:
+                continue
+
+    def _check_disk_quota(self):
+        """Stop sync and unload launchd if the managed folder grows past the hard limit."""
+        now = time.time()
+        if now - self._last_disk_guard_check < self.DISK_CHECK_INTERVAL_SECONDS:
+            return False
+
+        self._last_disk_guard_check = now
+        limit = self._load_disk_quota_bytes()
+
+        size = self._directory_size_bytes(self.config_dir)
+        if size < limit:
+            return False
+
+        message = (
+            f"Agent Rules Sync stopped.\n"
+            f"{self.config_dir} exceeded its hard limit of {self._fmt_bytes(limit)}.\n"
+            f"Current usage: {self._fmt_bytes(size)}.\n"
+            "No further sync writes will occur until cleanup."
+        )
+        if not self.stop_event.is_set():
+            self.stop_event.set()
+            self._show_disk_alert(message, size, limit)
+            self._unload_launchd_daemon()
+        return True
 
     def _log_error(self, msg):
         """Log error to daemon log file."""
@@ -970,6 +1110,8 @@ class AgentRulesSync:
     ):
         self._log_message(f"Event watcher unavailable; using polling every {interval}s")
         while not self.stop_event.is_set():
+            if self._check_disk_quota():
+                break
             time.sleep(interval)
             changed, history_paths = self._detect_watch_changes(
                 file_hashes,
@@ -980,6 +1122,8 @@ class AgentRulesSync:
             )
             if changed:
                 self.sync()
+                if self._check_disk_quota():
+                    break
                 self._refresh_watch_state_after_sync(
                     file_hashes, skill_hashes, settings_hashes, mcp_hashes, history_hashes
                 )
@@ -1028,6 +1172,8 @@ class AgentRulesSync:
         last_history_check = time.monotonic()
         try:
             while not self.stop_event.is_set():
+                if self._check_disk_quota():
+                    break
                 try:
                     event_queue.get(timeout=HISTORY_INTERVAL)
                 except queue.Empty:
@@ -1050,6 +1196,8 @@ class AgentRulesSync:
                 )
                 if changed:
                     self.sync()
+                    if self._check_disk_quota():
+                        break
                     self._refresh_watch_state_after_sync(
                         file_hashes, skill_hashes, settings_hashes, mcp_hashes, history_hashes
                     )
@@ -1115,6 +1263,9 @@ class AgentRulesSync:
 
         # Initial sync to ensure rules and skills are propagated
         self.sync()
+        if self._check_disk_quota():
+            self._log_message("Watch stopped after initial sync (disk quota reached).")
+            return
         self.history_sync.sync(log_callback=self._log_message)
         self._refresh_watch_state_after_sync(
             file_hashes, skill_hashes, settings_hashes, mcp_hashes, history_hashes
