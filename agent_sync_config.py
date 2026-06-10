@@ -86,11 +86,18 @@ def load_config(config_dir: Path) -> SyncConfig:
             data = json.loads(path.read_text())
             # Merge with defaults so new keys are always present
             merged = json.loads(json.dumps(DEFAULT_CONFIG))
-            if "mode" in data:
+            if data.get("mode") in ("default", "per_component"):
                 merged["mode"] = data["mode"]
             for comp in COMPONENTS:
-                if comp in data.get("components", {}):
-                    merged["components"][comp].update(data["components"][comp])
+                comp_data = data.get("components", {}).get(comp)
+                if not isinstance(comp_data, dict):
+                    continue
+                direction = comp_data.get("direction")
+                enabled = comp_data.get("enabled")
+                if direction in VALID_DIRECTIONS[comp]:
+                    merged["components"][comp]["direction"] = direction
+                if isinstance(enabled, bool):
+                    merged["components"][comp]["enabled"] = enabled
             return SyncConfig(merged)
         except Exception:
             pass
