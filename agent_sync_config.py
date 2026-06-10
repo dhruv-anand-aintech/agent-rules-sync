@@ -88,8 +88,11 @@ def load_config(config_dir: Path) -> SyncConfig:
             merged = json.loads(json.dumps(DEFAULT_CONFIG))
             if data.get("mode") in ("default", "per_component"):
                 merged["mode"] = data["mode"]
+            components_data = data.get("components", {})
+            if not isinstance(components_data, dict):
+                components_data = {}
             for comp in COMPONENTS:
-                comp_data = data.get("components", {}).get(comp)
+                comp_data = components_data.get(comp)
                 if not isinstance(comp_data, dict):
                     continue
                 direction = comp_data.get("direction")

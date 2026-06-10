@@ -40,3 +40,16 @@ def test_load_config_accepts_valid_partial_overrides(tmp_path):
     assert cfg.enabled("mcp") is True
     assert cfg.direction("hooks") == "push"
     assert cfg.enabled("hooks") is False
+
+
+def test_load_config_ignores_non_object_components_without_discarding_valid_mode(tmp_path):
+    (tmp_path / "sync_config.json").write_text(json.dumps({
+        "mode": "per_component",
+        "components": ["rules"],
+    }))
+
+    cfg = load_config(tmp_path)
+
+    assert cfg.mode == "per_component"
+    assert cfg.direction("rules") == DEFAULT_CONFIG["components"]["rules"]["direction"]
+    assert cfg.enabled("rules") is DEFAULT_CONFIG["components"]["rules"]["enabled"]
