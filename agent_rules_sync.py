@@ -48,6 +48,9 @@ class AgentRulesSync:
 
     DEFAULT_DISK_LIMIT_BYTES = 5 * 1024 * 1024 * 1024
     DISK_CHECK_INTERVAL_SECONDS = 2
+    EVENT_DETECT_INTERVAL_SECONDS = 30
+    WATCH_DIAGNOSTIC_SECONDS = 0.5
+    WATCH_ROOT_WARNING_COUNT = 40
 
     def __init__(self):
         """Initialize the sync manager with config in ~/.config/agent-rules-sync/"""
@@ -991,12 +994,21 @@ class AgentRulesSync:
         history_hashes,
         check_history=True,
     ):
+        started = time.monotonic()
         changed = False
+        detail = {
+            "rules": 0,
+            "skills": 0,
+            "settings": 0,
+            "mcp": 0,
+            "history": 0,
+        }
 
         master_hash = self._get_file_hash(self.master_file)
         if master_hash != file_hashes.get("master"):
             changed = True
             file_hashes["master"] = master_hash
+            detail["rules"] += 1
 
         for agent_id, config in self.agents.items():
             if agent_id == "cursor":
@@ -1005,42 +1017,96 @@ class AgentRulesSync:
                     if current_hash != file_hashes.get(key):
                         changed = True
                         file_hashes[key] = current_hash
+                        detail["rules"] += 1
                 continue
             current_hash = self._get_file_hash(config["path"])
             if current_hash != file_hashes.get(agent_id):
                 changed = True
                 file_hashes[agent_id] = current_hash
+                detail["rules"] += 1
 
         for key, p in self._cursorrules_watch_pairs():
             current_hash = self._get_file_hash(p)
             if current_hash != file_hashes.get(key):
                 changed = True
                 file_hashes[key] = current_hash
+                detail["rules"] += 1
 
         if self.skills_sync.skills_changed(skill_hashes):
             changed = True
             skill_hashes.clear()
             skill_hashes.update(self.skills_sync.get_watch_paths_and_hashes())
+            detail["skills"] += 1
 
         if self.settings_sync.settings_changed(settings_hashes):
             changed = True
             settings_hashes.clear()
             settings_hashes.update(self.settings_sync.get_watch_hashes())
+            detail["settings"] += 1
 
         if self.mcp_sync.mcp_changed(mcp_hashes):
             changed = True
             mcp_hashes.clear()
             mcp_hashes.update(self.mcp_sync.get_watch_hashes())
+            detail["mcp"] += 1
 
         # History check is expensive (~360ms rglob over 600+ transcript files) and must
         # not run on every FSEvent. Callers that want history results pass check_history=True
         # explicitly; the hot event path passes check_history=False.
         if check_history:
             history_paths = self.history_sync.history_changed(history_hashes)
+            detail["history"] = len(history_paths)
         else:
             history_paths = []
 
+        elapsed = time.monotonic() - started
+        if elapsed >= self.WATCH_DIAGNOSTIC_SECONDS:
+            self._log_message(
+                "Watch change detection took "
+                f"{elapsed:.2f}s; check_history={check_history}; changed={changed}; "
+                f"details={detail}; tracked rules={len(file_hashes)}, skills={len(skill_hashes)}, "
+                f"settings={len(settings_hashes)}, mcp={len(mcp_hashes)}, history={len(history_hashes)}"
+            )
+
         return changed, history_paths
+
+    def _broad_home_watch_parents(self):
+        home = Path.home()
+        return {
+            home,
+            home / ".claude",
+            home / ".codex",
+            home / ".config",
+            home / ".cursor",
+            home / ".gemini",
+        }
+
+    def _add_watch_parent(self, roots, path, skipped):
+        """Add a recursive watch parent unless it is a broad, high-churn home dir."""
+        parent = Path(path).expanduser().parent
+        try:
+            broad_parents = {p.resolve() for p in self._broad_home_watch_parents()}
+            if parent.resolve() in broad_parents:
+                skipped.append(str(path))
+                return
+        except Exception:
+            if parent in self._broad_home_watch_parents():
+                skipped.append(str(path))
+                return
+        roots.add(parent)
+
+    @staticmethod
+    def _dedupe_nested_roots(roots):
+        """Remove roots already covered by an earlier recursive parent watch."""
+        deduped = []
+        skipped = []
+        for root in sorted(roots, key=lambda p: (len(Path(p).parts), str(p))):
+            root = Path(root)
+            if any(root == kept or root.is_relative_to(kept) for kept in deduped):
+                skipped.append(root)
+                continue
+            deduped.append(root)
+        return deduped, skipped
 
     def _event_watch_roots(self, file_hashes, settings_hashes, mcp_hashes, history_hashes):
         roots = {
@@ -1048,9 +1114,10 @@ class AgentRulesSync:
             self.master_file.parent,
             self.skills_sync.master_skills_dir,
         }
+        skipped_home_files = []
 
         for config in self.agents.values():
-            roots.add(config["path"].parent)
+            self._add_watch_parent(roots, config["path"], skipped_home_files)
         if self._cursor_layout_is_canonical():
             roots.add(self._cursor_primary_path().parent)
         for _, p in self._cursorrules_watch_pairs():
@@ -1058,16 +1125,15 @@ class AgentRulesSync:
             # home directory recursively via FSEvents — every transcript append, cache write,
             # etc. would fire. Skip home-level paths; .cursorrules is stable and low-churn,
             # so the 3s polling fallback in _run_polling_watch_loop is sufficient coverage.
-            if p.parent != Path.home():
-                roots.add(p.parent)
+            self._add_watch_parent(roots, p, skipped_home_files)
 
         for fw in self.skills_sync.frameworks.values():
             roots.add(fw["path"])
 
         for path in settings_hashes:
-            roots.add(path.parent)
+            self._add_watch_parent(roots, path, skipped_home_files)
         for path in mcp_hashes:
-            roots.add(path.parent)
+            self._add_watch_parent(roots, path, skipped_home_files)
         # NOTE: transcript roots (claude/projects, codex/sessions, etc.) are intentionally
         # excluded from the FSEvents observer. Those dirs receive constant appends from active
         # AI sessions and would fire _detect_watch_changes (including a 360ms rglob) on every
@@ -1097,7 +1163,21 @@ class AgentRulesSync:
             if resolved not in seen:
                 seen.add(resolved)
                 existing.append(resolved)
-        return existing
+        deduped, skipped_nested = self._dedupe_nested_roots(existing)
+        if skipped_home_files:
+            self._log_message(
+                "Skipped broad recursive watch roots for hash-polled files: "
+                + ", ".join(sorted(skipped_home_files)[:10])
+            )
+        if skipped_nested:
+            self._log_message(
+                f"Deduplicated {len(skipped_nested)} nested recursive watch root(s)"
+            )
+        if len(deduped) >= self.WATCH_ROOT_WARNING_COUNT:
+            self._log_message(
+                f"High recursive watch root count: {len(deduped)} roots"
+            )
+        return deduped
 
     def _run_polling_watch_loop(
         self,
@@ -1161,24 +1241,29 @@ class AgentRulesSync:
                 event_queue.put(event)
 
         observer = Observer()
-        for root in self._event_watch_roots(
+        watch_roots = self._event_watch_roots(
             file_hashes, settings_hashes, mcp_hashes, history_hashes
-        ):
+        )
+        self._log_message(f"Event watch roots: {len(watch_roots)} recursive root(s)")
+        for root in watch_roots:
             observer.schedule(SyncEventHandler(), str(root), recursive=True)
 
         observer.start()
         self._log_message("Event watch started")
         HISTORY_INTERVAL = 60  # seconds between history scans (expensive rglob, not event-driven)
         last_history_check = time.monotonic()
+        last_event_detect = 0.0
         try:
             while not self.stop_event.is_set():
                 if self._check_disk_quota():
                     break
+                event_received = False
                 try:
                     event_queue.get(timeout=HISTORY_INTERVAL)
                 except queue.Empty:
                     pass
                 else:
+                    event_received = True
                     time.sleep(0.75)
                     while True:
                         try:
@@ -1186,39 +1271,54 @@ class AgentRulesSync:
                         except queue.Empty:
                             break
 
-                changed, _ignored_history = self._detect_watch_changes(
-                    file_hashes,
-                    skill_hashes,
-                    settings_hashes,
-                    mcp_hashes,
-                    history_hashes,
-                    check_history=False,  # history scanned on slow timer below, not every event
-                )
-                if changed:
-                    self.sync()
-                    if self._check_disk_quota():
-                        break
-                    self._refresh_watch_state_after_sync(
-                        file_hashes, skill_hashes, settings_hashes, mcp_hashes, history_hashes
+                now = time.monotonic()
+                should_detect = True
+                if event_received and now - last_event_detect < self.EVENT_DETECT_INTERVAL_SECONDS:
+                    should_detect = False
+                    remaining = self.EVENT_DETECT_INTERVAL_SECONDS - (now - last_event_detect)
+                    time.sleep(min(1.0, remaining))
+                if should_detect:
+                    last_event_detect = now
+                    changed, _ignored_history = self._detect_watch_changes(
+                        file_hashes,
+                        skill_hashes,
+                        settings_hashes,
+                        mcp_hashes,
+                        history_hashes,
+                        check_history=False,  # history scanned on slow timer below, not every event
                     )
-                    # Drain any FSEvents queued during sync — skill/settings writes by sync()
-                    # itself fire events that would immediately re-trigger a sync (write-loop).
-                    # Safe to discard: we just refreshed watch state to the post-sync baseline.
-                    try:
-                        while True:
-                            event_queue.get_nowait()
-                    except queue.Empty:
-                        pass
-                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    msg = "✓ Synced rules and skills across all agents"
-                    print(f"[{timestamp}] {msg}")
-                    self._log_message(msg)
+                    if changed:
+                        self.sync()
+                        if self._check_disk_quota():
+                            break
+                        self._refresh_watch_state_after_sync(
+                            file_hashes, skill_hashes, settings_hashes, mcp_hashes, history_hashes
+                        )
+                        # Drain any FSEvents queued during sync — skill/settings writes by sync()
+                        # itself fire events that would immediately re-trigger a sync (write-loop).
+                        # Safe to discard: we just refreshed watch state to the post-sync baseline.
+                        try:
+                            while True:
+                                event_queue.get_nowait()
+                        except queue.Empty:
+                            pass
+                        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        msg = "✓ Synced rules and skills across all agents"
+                        print(f"[{timestamp}] {msg}")
+                        self._log_message(msg)
 
                 # History sync on a slow timer — rglob across 600+ transcript files is ~360ms
                 now = time.monotonic()
                 if now - last_history_check >= HISTORY_INTERVAL:
                     last_history_check = now
+                    history_started = time.monotonic()
                     history_paths = self.history_sync.history_changed(history_hashes)
+                    history_elapsed = time.monotonic() - history_started
+                    if history_elapsed >= self.WATCH_DIAGNOSTIC_SECONDS:
+                        self._log_message(
+                            f"History watch scan took {history_elapsed:.2f}s; "
+                            f"changed_paths={len(history_paths)}; tracked_history={len(history_hashes)}"
+                        )
                     if history_paths:
                         self._sync_history_paths(history_paths)
         finally:
