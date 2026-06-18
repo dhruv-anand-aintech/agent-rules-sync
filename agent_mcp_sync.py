@@ -322,15 +322,22 @@ class AgentMcpSync:
             return None
         return hashlib.sha256(path.read_bytes()).hexdigest()
 
+    def _canonicalize(self, data):
+        if isinstance(data, dict):
+            return {k: self._canonicalize(v) for k, v in sorted(data.items())}
+        if isinstance(data, list):
+            return [self._canonicalize(v) for v in data]
+        return data
+
     def _data_hash(self, data) -> str:
         return hashlib.sha256(
-            json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
+            json.dumps(
+                self._canonicalize(data), sort_keys=True, separators=(",", ":")
+            ).encode()
         ).hexdigest()
 
     def _json_equal(self, left, right) -> bool:
-        return json.dumps(left, sort_keys=True, separators=(",", ":")) == json.dumps(
-            right, sort_keys=True, separators=(",", ":")
-        )
+        return self._canonicalize(left) == self._canonicalize(right)
 
     def _watch_hash_for_target(
         self,
