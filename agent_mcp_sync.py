@@ -265,7 +265,10 @@ class AgentMcpSync:
 
         output_text = "\n".join(output).rstrip() + "\n"
         path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists() and path.read_text() == output_text:
+            return False
         path.write_text(output_text)
+        return True
 
     def _get_mcp_servers(self, path: Path, info: dict = None) -> dict:
         """Extract MCP servers from a file."""
@@ -318,6 +321,42 @@ class AgentMcpSync:
         if not path.exists():
             return None
         return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def _canonicalize(self, data):
+        if isinstance(data, dict):
+            return {k: self._canonicalize(v) for k, v in sorted(data.items())}
+        if isinstance(data, list):
+            return [self._canonicalize(v) for v in data]
+        return data
+
+    def _data_hash(self, data) -> str:
+        return hashlib.sha256(
+            json.dumps(
+                self._canonicalize(data), sort_keys=True, separators=(",", ":")
+            ).encode()
+        ).hexdigest()
+
+    def _json_equal(self, left, right) -> bool:
+        return self._canonicalize(left) == self._canonicalize(right)
+
+    def _watch_hash_for_target(
+        self,
+        path: Path,
+        label: str,
+        info: dict | None = None,
+        repo: Path | None = None,
+    ) -> str | None:
+        if not path.exists():
+            return None
+        try:
+            servers = self._get_mcp_servers(path, info)
+            excluded = self.exclusions.for_target("mcp", label, repo)
+            normalized = {
+                name: cfg for name, cfg in servers.items() if name not in excluded
+            }
+            return self._data_hash(normalized)
+        except Exception:
+            return self._file_hash(path)
 
     def _backup_file(self, path: Path, label: str):
         if not path.exists():
@@ -417,7 +456,14 @@ class AgentMcpSync:
         new_master = {"mcpServers": all_servers}
         new_master_json = json.dumps(new_master, indent=2) + "\n"
 
-        if not self.master_file.exists() or self.master_file.read_text() != new_master_json:
+        master_changed = True
+        if self.master_file.exists():
+            try:
+                master_changed = not self._json_equal(json.loads(self.master_file.read_text()), new_master)
+            except Exception:
+                master_changed = self.master_file.read_text() != new_master_json
+
+        if not self.master_file.exists() or master_changed:
             if self.master_file.exists():
                 self._backup_file(self.master_file, "master")
             self.master_file.write_text(new_master_json)
@@ -469,11 +515,18 @@ class AgentMcpSync:
         new_json = json.dumps(new_data, indent=2) + "\n"
 
         if info and info.get("format") == "toml":
-            self._update_toml_mcp_section(path, output_servers)
-            log(f"[mcp] Synced {label} ({path.name})")
+            if self._update_toml_mcp_section(path, output_servers):
+                log(f"[mcp] Synced {label} ({path.name})")
             return
 
-        if not path.exists() or path.read_text() != new_json:
+        json_changed = True
+        if path.exists():
+            try:
+                json_changed = not self._json_equal(json.loads(path.read_text()), new_data)
+            except Exception:
+                json_changed = path.read_text() != new_json
+
+        if not path.exists() or json_changed:
             if path.exists():
                 self._backup_file(path, label)
             path.write_text(new_json)
@@ -482,17 +535,24 @@ class AgentMcpSync:
     def get_watch_hashes(self) -> dict:
         hashes = {}
         if self.master_file.exists():
-            hashes[self.master_file] = self._file_hash(self.master_file)
+            try:
+                hashes[self.master_file] = self._data_hash(
+                    json.loads(self.master_file.read_text()).get("mcpServers", {})
+                )
+            except Exception:
+                hashes[self.master_file] = self._file_hash(self.master_file)
         
         for label, info in self.global_sources.items():
             path = info["path"]
             if path.exists():
-                hashes[path] = self._file_hash(path)
+                hashes[path] = self._watch_hash_for_target(path, label, info)
         
         for repo in self.repo_paths:
             for path in self._repo_mcp_paths(repo):
                 if path.exists():
-                    hashes[path] = self._file_hash(path)
+                    hashes[path] = self._watch_hash_for_target(
+                        path, f"repo:{repo.name}", None, repo
+                    )
 
         for path in self.plugin_mcp_paths:
             if path.exists():

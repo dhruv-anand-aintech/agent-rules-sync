@@ -92,6 +92,35 @@ def test_sync_aborts_when_disk_quota_exceeded(monkeypatch, tmp_path):
     assert unload_called == [True]
     assert len(alert_called) == 1
 
+
+def test_event_watch_roots_skip_home_level_mcp_file(monkeypatch, tmp_path):
+    """Broad home-level agent config files should be hash-polled, not recursive roots."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: home)
+
+    sync = AgentRulesSync()
+    sync.config_dir = home / ".config" / "agent-rules-sync"
+    sync.master_file = sync.config_dir / "RULES.md"
+    sync.skills_sync.master_skills_dir = sync.config_dir / "skills"
+    sync.skills_sync.frameworks = {}
+    sync.settings_sync.repo_paths = []
+    sync.mcp_sync.repo_paths = []
+
+    claude_mcp = home / ".claude.json"
+    claude_mcp.write_text('{"mcpServers": {}}\n', encoding="utf-8")
+    mcp_hashes = sync.mcp_sync.get_watch_hashes()
+
+    assert claude_mcp in mcp_hashes
+
+    roots = sync._event_watch_roots({}, {}, mcp_hashes, {})
+
+    assert home.resolve() not in roots
+    assert (home / ".config").resolve() not in roots
+    assert (home / ".claude").resolve() not in roots
+    assert sync.config_dir.resolve() in roots
+
+
 def test_build_file_content():
     sync = AgentRulesSync()
     shared = {"- rule 1", "- rule 2"}
