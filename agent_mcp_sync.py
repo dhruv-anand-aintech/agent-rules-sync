@@ -265,7 +265,10 @@ class AgentMcpSync:
 
         output_text = "\n".join(output).rstrip() + "\n"
         path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists() and path.read_text() == output_text:
+            return False
         path.write_text(output_text)
+        return True
 
     def _get_mcp_servers(self, path: Path, info: dict = None) -> dict:
         """Extract MCP servers from a file."""
@@ -469,8 +472,8 @@ class AgentMcpSync:
         new_json = json.dumps(new_data, indent=2) + "\n"
 
         if info and info.get("format") == "toml":
-            self._update_toml_mcp_section(path, output_servers)
-            log(f"[mcp] Synced {label} ({path.name})")
+            if self._update_toml_mcp_section(path, output_servers):
+                log(f"[mcp] Synced {label} ({path.name})")
             return
 
         if not path.exists() or path.read_text() != new_json:
