@@ -73,6 +73,7 @@ class AgentHistorySync:
             / "workspaceStorage"
         )
         self._cursor_bubble_timestamp_cache: dict[str, list[int]] = {}
+        self._state_needs_compaction = False
         self.hostname = f"{socket.gethostname()}:{os.environ.get('USER', 'agent')}"
 
     def sync(
@@ -87,6 +88,8 @@ class AgentHistorySync:
 
         new_commands = [cmd for cmd in commands if cmd.key not in state]
         if not new_commands:
+            if self._state_needs_compaction and not dry_run:
+                self._save_state(state)
             return {"found": len(commands), "imported": 0}
 
         self._append_jsonl(new_commands, dry_run=dry_run)
@@ -99,11 +102,7 @@ class AgentHistorySync:
 
         if not dry_run:
             for cmd in new_commands:
-                state[cmd.key] = {
-                    "platform": cmd.platform,
-                    "source": cmd.source,
-                    "timestamp_ns": cmd.timestamp_ns,
-                }
+                state.add(cmd.key)
             self._save_state(state)
 
         return {"found": len(commands), "imported": imported}
@@ -190,17 +189,33 @@ class AgentHistorySync:
         elif ".openclaw" in parts and "agents" in parts:
             yield from self._iter_openclaw_file(path)
 
-    def _load_state(self) -> dict:
+    def _load_state(self) -> set[str]:
+        self._state_needs_compaction = False
         if not self.state_file.exists():
-            return {}
+            return set()
         try:
-            return json.loads(self.state_file.read_text(encoding="utf-8"))
+            data = json.loads(self.state_file.read_text(encoding="utf-8"))
         except Exception:
-            return {}
+            return set()
 
-    def _save_state(self, state: dict) -> None:
+        if isinstance(data, dict) and data.get("version") == 2:
+            keys = data.get("keys") or []
+            return {str(key) for key in keys if isinstance(key, str)}
+        if isinstance(data, list):
+            self._state_needs_compaction = True
+            return {str(key) for key in data if isinstance(key, str)}
+        if isinstance(data, dict):
+            self._state_needs_compaction = True
+            return {str(key) for key in data.keys()}
+        return set()
+
+    def _save_state(self, state: set[str]) -> None:
         self.state_file.write_text(
-            json.dumps(state, indent=2, sort_keys=True) + "\n",
+            json.dumps(
+                {"version": 2, "keys": sorted(state)},
+                separators=(",", ":"),
+            )
+            + "\n",
             encoding="utf-8",
         )
 
@@ -454,27 +469,42 @@ class AgentHistorySync:
             return
         workspace_map = self._cursor_composer_workspace_map()
         max_rows = 5000
+        scan_limit = 20000
+        rows = []
         try:
             conn = sqlite3.connect(str(self.cursor_state_db))
-            conn.row_factory = sqlite3.Row
             try:
                 cursor = conn.execute(
                     """
-                    select
-                        substr(key, 10, 36) as composer_id,
-                        json_extract(value, '$.bubbleId') as bubble_id,
-                        json_extract(value, '$.toolFormerData.name') as tool_name,
-                        json_extract(value, '$.toolFormerData.rawArgs') as raw_args,
-                        coalesce(json_extract(value, '$.createdAt'), json_extract(value, '$.timestamp')) as timestamp
+                    select key, value
                     from cursorDiskKV
-                    where key like 'bubbleId:%'
-                      and json_extract(value, '$.toolFormerData.name') in ('run_terminal_command_v2', 'run_terminal_cmd')
+                    where key >= 'bubbleId:' and key < 'bubbleId;'
                     order by key desc
                     limit ?
                     """,
-                    (max_rows,),
+                    (scan_limit,),
                 )
-                rows = cursor.fetchall()
+                for key, value in cursor:
+                    data = self._parse_json_blob(value)
+                    tool_data = data.get("toolFormerData") if isinstance(data, dict) else None
+                    if not isinstance(tool_data, dict):
+                        continue
+                    tool_name = tool_data.get("name")
+                    if tool_name not in {"run_terminal_command_v2", "run_terminal_cmd"}:
+                        continue
+                    parts = str(key).split(":", 2)
+                    if len(parts) < 2:
+                        continue
+                    rows.append(
+                        {
+                            "composer_id": parts[1],
+                            "tool_name": tool_name,
+                            "raw_args": tool_data.get("rawArgs"),
+                            "timestamp": data.get("createdAt") or data.get("timestamp"),
+                        }
+                    )
+                    if len(rows) >= max_rows:
+                        break
             finally:
                 conn.close()
         except Exception:
@@ -508,34 +538,36 @@ class AgentHistorySync:
         if not self.cursor_state_db.exists():
             return {}
         max_composers = 2000
+        rows = []
         try:
             conn = sqlite3.connect(str(self.cursor_state_db))
             try:
-                rows = conn.execute(
+                cursor = conn.execute(
                     """
-                    select
-                        substr(key, 14) as composer_id,
-                        json_extract(value, '$.createdAt') as created_at,
-                        json_extract(value, '$.lastUpdatedAt') as updated_at
+                    select key, value
                     from cursorDiskKV
-                    where key like 'composerData:%'
+                    where key >= 'composerData:' and key < 'composerData;'
                     order by key desc
                     limit ?
                     """,
                     (max_composers,),
-                ).fetchall()
+                )
+                rows = list(cursor)
             finally:
                 conn.close()
         except Exception:
             return {}
-        return {
-            str(row[0]): (
-                self._timestamp_ns_or_none(row[1]),
-                self._timestamp_ns_or_none(row[2]),
+        out = {}
+        for key, value in rows:
+            parts = str(key).split(":", 1)
+            if len(parts) != 2:
+                continue
+            data = self._parse_json_blob(value)
+            out[parts[1]] = (
+                self._timestamp_ns_or_none(data.get("createdAt")),
+                self._timestamp_ns_or_none(data.get("lastUpdatedAt")),
             )
-            for row in rows
-            if row and row[0]
-        }
+        return out
 
     def _cursor_composer_workspace_map(self) -> dict[str, str]:
         out: dict[str, str] = {}
@@ -813,6 +845,15 @@ class AgentHistorySync:
             except Exception:
                 return {}
         return {}
+
+    @staticmethod
+    def _parse_json_blob(value) -> dict:
+        if isinstance(value, bytes):
+            try:
+                value = value.decode("utf-8")
+            except Exception:
+                return {}
+        return AgentHistorySync._parse_jsonish(value)
 
     @staticmethod
     def _content_blocks(event: dict) -> list:

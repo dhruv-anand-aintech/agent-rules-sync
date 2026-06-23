@@ -47,7 +47,8 @@ class AgentRulesSync:
     """Manages synchronization of rules across AI coding assistants."""
 
     DEFAULT_DISK_LIMIT_BYTES = 5 * 1024 * 1024 * 1024
-    DISK_CHECK_INTERVAL_SECONDS = 2
+    DISK_CHECK_INTERVAL_SECONDS = 300
+    QUOTA_SIZE_CACHE_DIRS = {"backups", "skill_backups", "mcp_backups"}
     EVENT_DETECT_INTERVAL_SECONDS = 30
     WATCH_DIAGNOSTIC_SECONDS = 0.5
     WATCH_ROOT_WARNING_COUNT = 40
@@ -73,6 +74,7 @@ class AgentRulesSync:
         # Stop event for graceful Windows daemon shutdown
         self.stop_event = threading.Event()
         self._last_disk_guard_check = 0.0
+        self._size_cache = {}
         self._launchd_label = os.environ.get("ARSRULES_LAUNCHD_LABEL", "com.local.agent-rules-sync")
 
         # Skills sync (syncs skills across Cursor, Claude, Codex, Gemini, OpenCode)
@@ -612,7 +614,7 @@ class AgentRulesSync:
         - Union of all current rules (additions from any file)
         - Subtract any rules that were in previous state but removed from ANY file
         """
-        if self._check_disk_quota():
+        if self._check_disk_quota(force=True):
             return
         try:
             # Tests (and future callers) may point config_dir at an isolated directory after
@@ -789,7 +791,7 @@ class AgentRulesSync:
                     )
                 except Exception as e:
                     self._log_error(f"MCP sync error: {e}")
-            self._check_disk_quota()
+            self._check_disk_quota(force=True)
         except Exception as e:
             self._log_error(f"Sync error: {e}")
 
@@ -817,8 +819,9 @@ class AgentRulesSync:
             value /= 1024.0
         return f"{value:.2f} PB"
 
-    def _directory_size_bytes(self, path):
+    def _directory_size_bytes_uncached(self, path):
         """Return byte size for a directory tree, skipping symbolic links."""
+        path = Path(path)
         if not path.exists():
             return 0
         total = 0
@@ -831,6 +834,55 @@ class AgentRulesSync:
                     total += p.stat(follow_symlinks=False).st_size
                 except OSError:
                     continue
+        return total
+
+    def _cacheable_directory_size_bytes(self, path):
+        """Return cached size for large append-only backup directories."""
+        try:
+            stat = path.stat(follow_symlinks=False)
+        except OSError:
+            return 0
+
+        cache_key = str(path)
+        signature = (stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns)
+        cached = self._size_cache.get(cache_key)
+        if cached and cached[0] == signature:
+            return cached[1]
+
+        total = self._directory_size_bytes_uncached(path)
+        self._size_cache[cache_key] = (signature, total)
+        return total
+
+    def _directory_size_bytes(self, path):
+        """Return byte size for a directory tree, caching known append-only backup dirs."""
+        path = Path(path)
+        if not path.exists():
+            return 0
+        if path.is_file():
+            try:
+                return path.stat(follow_symlinks=False).st_size
+            except OSError:
+                return 0
+
+        total = 0
+        try:
+            entries = list(path.iterdir())
+        except OSError:
+            return 0
+
+        for entry in entries:
+            try:
+                if entry.is_symlink():
+                    continue
+                if entry.is_file():
+                    total += entry.stat(follow_symlinks=False).st_size
+                elif entry.is_dir():
+                    if entry.name in self.QUOTA_SIZE_CACHE_DIRS:
+                        total += self._cacheable_directory_size_bytes(entry)
+                    else:
+                        total += self._directory_size_bytes_uncached(entry)
+            except OSError:
+                continue
         return total
 
     def _load_disk_quota_bytes(self):
@@ -886,10 +938,10 @@ class AgentRulesSync:
             except Exception:
                 continue
 
-    def _check_disk_quota(self):
+    def _check_disk_quota(self, force=False):
         """Stop sync and unload launchd if the managed folder grows past the hard limit."""
         now = time.time()
-        if now - self._last_disk_guard_check < self.DISK_CHECK_INTERVAL_SECONDS:
+        if not force and now - self._last_disk_guard_check < self.DISK_CHECK_INTERVAL_SECONDS:
             return False
 
         self._last_disk_guard_check = now
@@ -1202,7 +1254,7 @@ class AgentRulesSync:
             )
             if changed:
                 self.sync()
-                if self._check_disk_quota():
+                if self._check_disk_quota(force=True):
                     break
                 self._refresh_watch_state_after_sync(
                     file_hashes, skill_hashes, settings_hashes, mcp_hashes, history_hashes
@@ -1289,7 +1341,7 @@ class AgentRulesSync:
                     )
                     if changed:
                         self.sync()
-                        if self._check_disk_quota():
+                        if self._check_disk_quota(force=True):
                             break
                         self._refresh_watch_state_after_sync(
                             file_hashes, skill_hashes, settings_hashes, mcp_hashes, history_hashes
@@ -1341,6 +1393,7 @@ class AgentRulesSync:
             msg = f"✓ Imported {result['imported']} agent command(s) into Atuin"
             print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
             self._log_message(msg)
+            self._check_disk_quota(force=True)
 
     def watch(self, interval=3):
         """Watch for changes and auto-sync."""
@@ -1363,10 +1416,11 @@ class AgentRulesSync:
 
         # Initial sync to ensure rules and skills are propagated
         self.sync()
-        if self._check_disk_quota():
+        if self._check_disk_quota(force=True):
             self._log_message("Watch stopped after initial sync (disk quota reached).")
             return
         self.history_sync.sync(log_callback=self._log_message)
+        self._check_disk_quota(force=True)
         self._refresh_watch_state_after_sync(
             file_hashes, skill_hashes, settings_hashes, mcp_hashes, history_hashes
         )

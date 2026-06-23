@@ -93,6 +93,42 @@ def test_sync_aborts_when_disk_quota_exceeded(monkeypatch, tmp_path):
     assert len(alert_called) == 1
 
 
+def test_disk_quota_check_is_throttled_unless_forced(monkeypatch, tmp_path):
+    """Idle watch loops should not recursively size the config tree every pass."""
+    sync = AgentRulesSync()
+    sync.config_dir = tmp_path
+    monkeypatch.setenv("ARSRULES_DISK_LIMIT_BYTES", "100")
+
+    calls = []
+    monkeypatch.setattr(sync, "_directory_size_bytes", lambda _path: calls.append(True) or 1)
+
+    assert sync._check_disk_quota() is False
+    assert calls == [True]
+
+    assert sync._check_disk_quota() is False
+    assert calls == [True]
+
+    assert sync._check_disk_quota(force=True) is False
+    assert calls == [True, True]
+
+
+def test_directory_size_caches_backup_subtrees(tmp_path):
+    """Large append-only backup trees should not be rescanned while unchanged."""
+    sync = AgentRulesSync()
+    root = tmp_path / "agent-rules-sync"
+    backup_dir = root / "mcp_backups"
+    backup_dir.mkdir(parents=True)
+    (backup_dir / "one.json").write_text("abc", encoding="utf-8")
+
+    assert sync._directory_size_bytes(root) == 3
+
+    (backup_dir / "one.json").write_text("abcdef", encoding="utf-8")
+    assert sync._directory_size_bytes(root) == 3
+
+    (backup_dir / "two.json").write_text("xy", encoding="utf-8")
+    assert sync._directory_size_bytes(root) == 8
+
+
 def test_event_watch_roots_skip_home_level_mcp_file(monkeypatch, tmp_path):
     """Broad home-level agent config files should be hash-polled, not recursive roots."""
     home = tmp_path / "home"

@@ -522,3 +522,43 @@ def test_history_changed_reports_new_and_modified_transcripts(tmp_path):
     transcript.write_text("{}\n{}\n")
     changed = sync.history_changed(hashes)
     assert changed == [transcript]
+
+
+def test_history_state_loads_legacy_verbose_map_and_saves_compact_keys(tmp_path):
+    sync = AgentHistorySync(config_dir=tmp_path / ".config" / "agent-rules-sync")
+    sync.state_file.write_text(
+        json.dumps(
+            {
+                "old-key": {
+                    "platform": "codex",
+                    "source": "/tmp/rollout.jsonl",
+                    "timestamp_ns": 1,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state = sync._load_state()
+    assert state == {"old-key"}
+
+    state.add("new-key")
+    sync._save_state(state)
+
+    saved = json.loads(sync.state_file.read_text(encoding="utf-8"))
+    assert saved == {"version": 2, "keys": ["new-key", "old-key"]}
+
+
+def test_history_sync_compacts_legacy_state_without_new_commands(monkeypatch, tmp_path):
+    sync = AgentHistorySync(config_dir=tmp_path / ".config" / "agent-rules-sync")
+    sync.state_file.write_text(
+        json.dumps({"old-key": {"platform": "codex"}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sync, "iter_commands", lambda paths=None: iter(()))
+
+    result = sync.sync()
+
+    assert result == {"found": 0, "imported": 0}
+    saved = json.loads(sync.state_file.read_text(encoding="utf-8"))
+    assert saved == {"version": 2, "keys": ["old-key"]}
