@@ -13,6 +13,16 @@ Schema:
       "skills":   { "direction": "bidirectional" | "push" | "pull", "enabled": true },
       "settings": { "direction": "push",                            "enabled": true },
       "hooks":    { "direction": "push",                            "enabled": true }
+    },
+    "skill_targets": {
+      "cursor": true,
+      "agents": true,
+      "custom-target": {
+        "enabled": true,
+        "path": "~/custom/skills",
+        "name": "Custom Target",
+        "description": "Optional custom skill sync target"
+      }
     }
   }
 
@@ -42,6 +52,18 @@ VALID_DIRECTIONS = {
 }
 
 # Default config — current behavior
+DEFAULT_SKILL_TARGETS = {
+    "cursor": True,
+    "cursor-skills-cursor": True,
+    "claude": True,
+    "codex": True,
+    "agents": True,
+    "antigravity-cli": True,
+    "gemini-antigravity": True,
+    "gemini-cli": True,
+    "opencode": True,
+}
+
 DEFAULT_CONFIG = {
     "version": CONFIG_VERSION,
     "mode": "default",
@@ -52,6 +74,7 @@ DEFAULT_CONFIG = {
         "hooks":    {"direction": "push",           "enabled": True},
         "mcp":      {"direction": "bidirectional", "enabled": True},
     },
+    "skill_targets": DEFAULT_SKILL_TARGETS,
 }
 
 
@@ -73,6 +96,17 @@ class SyncConfig:
 
     def enabled(self, name: str) -> bool:
         return self.component(name).get("enabled", True)
+
+    def skill_target_enabled(self, name: str) -> bool:
+        value = self._data.get("skill_targets", {}).get(name, True)
+        if isinstance(value, dict):
+            return value.get("enabled", True) is not False
+        if isinstance(value, bool):
+            return value
+        return True
+
+    def skill_target_configs(self) -> dict:
+        return self._data.get("skill_targets", {})
 
     def to_dict(self) -> dict:
         return self._data
@@ -101,6 +135,29 @@ def load_config(config_dir: Path) -> SyncConfig:
                     merged["components"][comp]["direction"] = direction
                 if isinstance(enabled, bool):
                     merged["components"][comp]["enabled"] = enabled
+            targets_data = data.get("skill_targets", {})
+            if isinstance(targets_data, dict):
+                for target, target_data in targets_data.items():
+                    if isinstance(target_data, bool):
+                        merged["skill_targets"][target] = target_data
+                    elif isinstance(target_data, dict):
+                        existing = merged["skill_targets"].get(target)
+                        if isinstance(existing, dict):
+                            target_config = dict(existing)
+                        elif isinstance(existing, bool):
+                            target_config = {"enabled": existing}
+                        else:
+                            target_config = {"enabled": True}
+
+                        enabled = target_data.get("enabled")
+                        if isinstance(enabled, bool):
+                            target_config["enabled"] = enabled
+                        for key in ("path", "name", "description"):
+                            value = target_data.get(key)
+                            if isinstance(value, str) and value:
+                                target_config[key] = value
+
+                        merged["skill_targets"][target] = target_config
             return SyncConfig(merged)
         except Exception:
             pass

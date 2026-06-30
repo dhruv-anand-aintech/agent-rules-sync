@@ -1,5 +1,6 @@
 """Tests for AgentSkillsSync - skills sync across agent frameworks."""
 
+import json
 import tempfile
 from pathlib import Path
 import shutil
@@ -370,6 +371,61 @@ def test_framework_paths_use_home():
         sync.frameworks["codex"]["path"]
     )
     assert "antigravity-cli" in str(sync.frameworks["antigravity-cli"]["path"])
+
+
+def test_default_config_includes_shared_agents_target(tmp_path):
+    sync = AgentSkillsSync(config_dir=tmp_path / "config")
+
+    assert sync.frameworks["agents"]["path"] == Path.home() / ".agents" / "skills"
+
+
+def test_skill_targets_config_can_disable_agents_target(tmp_path):
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    (cfg / "sync_config.json").write_text('{"skill_targets": {"agents": false}}')
+
+    sync = AgentSkillsSync(config_dir=cfg)
+
+    assert "agents" not in sync.frameworks
+
+
+def test_skill_targets_config_can_disable_repo_target(tmp_path):
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (cfg / "repo_paths.json").write_text(f'["{repo}"]')
+    (cfg / "sync_config.json").write_text('{"skill_targets": {"repo:repo": false}}')
+
+    sync = AgentSkillsSync(config_dir=cfg)
+
+    assert "repo:repo" not in sync.frameworks
+
+
+def test_skill_targets_config_can_add_custom_target_path(tmp_path):
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    custom_path = tmp_path / "custom-skills"
+    (cfg / "sync_config.json").write_text(json.dumps({
+        "skill_targets": {"custom": {"path": str(custom_path)}},
+    }))
+
+    sync = AgentSkillsSync(config_dir=cfg)
+
+    assert sync.frameworks["custom"]["path"] == custom_path
+
+
+def test_skill_targets_config_can_override_builtin_target_path(tmp_path):
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    codex_path = tmp_path / "codex-skills"
+    (cfg / "sync_config.json").write_text(json.dumps({
+        "skill_targets": {"codex": {"path": str(codex_path)}},
+    }))
+
+    sync = AgentSkillsSync(config_dir=cfg)
+
+    assert sync.frameworks["codex"]["path"] == codex_path
 
 
 def test_sync_creates_antigravity_cli_plugin(monkeypatch, tmp_path):

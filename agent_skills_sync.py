@@ -30,6 +30,7 @@ from pathlib import Path
 
 from agent_antigravity_cli import ensure_plugin as ensure_antigravity_cli_plugin
 from agent_exclusions import ExclusionRules
+from agent_sync_config import load_config
 
 
 class AgentSkillsSync:
@@ -48,6 +49,7 @@ class AgentSkillsSync:
         self.backup_dir.mkdir(exist_ok=True)
         self._skill_backup_hashes = {}
         self.exclusions = ExclusionRules(self.config_dir)
+        self.sync_config = load_config(self.config_dir)
 
         # Resolve CODEX_HOME for Codex skills path
         codex_home = os.environ.get("CODEX_HOME")
@@ -103,11 +105,39 @@ class AgentSkillsSync:
                 "description": "OpenCode global skills",
             },
         }
+        self._apply_configured_framework_paths()
+        self._filter_disabled_frameworks()
 
         # Load repo paths and add each repo's .claude/skills/ as a framework target.
         # Config: ~/.config/agent-rules-sync/repo_paths.json
         # Format: ["/abs/path/to/repo", "~/relative/path"]
         self._load_repo_framework_paths()
+
+    def _apply_configured_framework_paths(self):
+        """Apply path overrides and custom skill targets from sync_config.json."""
+        for fw_id, target_config in self.sync_config.skill_target_configs().items():
+            if not isinstance(target_config, dict):
+                continue
+            target_path = target_config.get("path")
+            if not target_path:
+                continue
+            framework = {
+                "name": target_config.get("name") or target_config.get("description") or fw_id,
+                "path": Path(target_path).expanduser(),
+                "description": target_config.get("description") or "Configured skill target",
+            }
+            if fw_id in self.frameworks:
+                self.frameworks[fw_id].update(framework)
+            else:
+                self.frameworks[fw_id] = framework
+
+    def _filter_disabled_frameworks(self):
+        """Remove framework targets disabled in sync_config.json."""
+        self.frameworks = {
+            fw_id: fw
+            for fw_id, fw in self.frameworks.items()
+            if self.sync_config.skill_target_enabled(fw_id)
+        }
 
     def _load_repo_framework_paths(self):
         """Add configured repos' .claude/skills/ dirs as sync targets."""
@@ -121,6 +151,8 @@ class AgentSkillsSync:
                 repo = Path(repo_path).expanduser().resolve()
                 if repo.is_dir():
                     fw_id = f"repo:{repo.name}"
+                    if not self.sync_config.skill_target_enabled(fw_id):
+                        continue
                     self.frameworks[fw_id] = {
                         "name": f"Repo: {repo.name}",
                         "path": repo / ".claude" / "skills",

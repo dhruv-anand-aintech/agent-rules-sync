@@ -53,3 +53,28 @@ def test_load_config_ignores_non_object_components_without_discarding_valid_mode
     assert cfg.mode == "per_component"
     assert cfg.direction("rules") == DEFAULT_CONFIG["components"]["rules"]["direction"]
     assert cfg.enabled("rules") is DEFAULT_CONFIG["components"]["rules"]["enabled"]
+
+
+def test_load_config_merges_skill_target_overrides(tmp_path):
+    (tmp_path / "sync_config.json").write_text(json.dumps({
+        "skill_targets": {
+            "agents": False,
+            "repo:example": False,
+            "codex": "no",
+            "custom": {
+                "enabled": False,
+                "path": "~/custom/skills",
+                "name": "Custom Skills",
+                "description": "Custom path",
+            },
+        },
+    }))
+
+    cfg = load_config(tmp_path)
+
+    assert cfg.skill_target_enabled("agents") is False
+    assert cfg.skill_target_enabled("repo:example") is False
+    assert cfg.skill_target_enabled("codex") is True
+    assert cfg.skill_target_enabled("new-target") is True
+    assert cfg.skill_target_enabled("custom") is False
+    assert cfg.skill_target_configs()["custom"]["path"] == "~/custom/skills"
